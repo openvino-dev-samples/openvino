@@ -69,6 +69,8 @@ std::vector<std::string> disabledTestPatterns() {
 
         // TODO: 57562 No dynamic output shape support
         R"(.*NonZeroLayerTest.*)",
+        // TODO: 69084 Not constant Axis input produces dynamic output shape.
+        R"(.*GatherLayerTestCPU.*constAx=False.*)",
         // Not expected behavior
         R"(.*Behavior.*InferRequestIOBBlobSetLayoutTest.*layout=(95|OIHW).*)",
         R"(.*Behavior.*InferRequestIOBBlobSetLayoutTest.*layout=(95|OIHW).*)",
@@ -135,7 +137,21 @@ std::vector<std::string> disabledTestPatterns() {
         // Issue 67910
         R"(.*smoke_PrePostProcess.*two_inputs_trivial.*)",
         // TODO: CVS-67255
-        R"(smoke_If.*SimpleIf2OutTest.*)"
+        R"(smoke_If.*SimpleIf2OutTest.*)",
+        // TODO: CVS-68525
+        R"(.*CanSetInBlobWithDifferentPrecision/netPRC=(I4|U4).*)",
+        R"(.*CanSetInBlobWithDifferentPrecision/netPRC=BIN.*)",
+        R"(.*CanSetOutBlobWithDifferentPrecision/netPRC=(I4|U4).*)",
+        R"(.*CanSetOutBlobWithDifferentPrecision/netPRC=BIN.*)",
+
+        // Issue: 69086
+        // need to add support convert BIN -> FP32
+        // if we set output precision as BIN, when we create output blob precision looks like UNSPECIFIED
+        R"(.*smoke_FakeQuantizeLayerCPUTest.*bin.*)",
+        // Issue: 69088
+        // bad accuracy
+        R"(.*smoke_FakeQuantizeLayerCPUTest_Decompos.
+            *IS=_TS=\(\(4\.5\.6\.7\)\)_RS=\(\(1\.1\.6\.1\)\)_\(\(1\.5\.6\.1\)\)_\(\(1\.1\.1\.1\)\)_\(\(1\.1\.6\.1\)\).*)",
     };
 
 #define FIX_62820 0

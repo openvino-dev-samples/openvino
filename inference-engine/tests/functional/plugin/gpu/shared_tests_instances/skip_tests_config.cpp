@@ -23,8 +23,6 @@ std::vector<std::string> disabledTestPatterns() {
             R"(.*(PreprocessTest).*(SetMeanImagePreProcessSetBlob).*)",
             R"(.*(PreprocessTest).*(ReverseInputChannelsPreProcessGetBlob).*)",
             R"(.*(InferRequestPreprocessDynamicallyInSetBlobTest).*)",
-            // TODO: Issue: 51764
-            ".*InferRequestPreprocessConversionTest.*",
             // TODO: Issue: 41462
             R"(.*(SoftMaxLayerTest).*axis=0.*)",
             // TODO: Issue: 43511
@@ -83,5 +81,16 @@ std::vector<std::string> disabledTestPatterns() {
             R"(.*smoke_LSTMSequenceCommonClip.*LSTMSequenceTest.*CompareWithRefs.*)",
             // TODO: Issue 67910
             R"(.*smoke_PrePostProcess_GPU.*two_inputs_trivial.*)",
+            // TODO: CVS-68525
+            R"(.*CanSetInBlobWithDifferentPrecision/netPRC=(I4|U4).*)",
+            R"(.*CanSetInBlobWithDifferentPrecision/netPRC=BIN.*)",
+            R"(.*CanSetOutBlobWithDifferentPrecision/netPRC=(I4|U4).*)",
+            R"(.*CanSetOutBlobWithDifferentPrecision/netPRC=BIN.*)",
+            // TODO: Issue: 68712
+            R"(.*.MatMul.*CompareWithRefs.*IS0=\(1.5\)_IS1=\(1.5\).*transpose_a=0.*transpose_b=1.*CONSTANT.*FP16.*UNSPECIFIED.*UNSPECIFIED.*ANY.*)",
+            // TODO: Issue 66685
+            R"(smoke_PrePostProcess.*resize_linear_nhwc.*)",
+            // TODO: Issue 69187
+            R"(smoke_PrePostProcess.*cvt_color_nv12.*)",
     };
 }

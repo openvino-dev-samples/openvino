@@ -227,6 +227,7 @@ void pad(const char* data,
         break;
     }
 }
+}  // namespace
 }  // namespace impl
 
 namespace reference {
