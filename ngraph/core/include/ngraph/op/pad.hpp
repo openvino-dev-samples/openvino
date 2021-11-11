@@ -14,5 +14,9 @@ namespace op {
 namespace v1 {
 using ov::op::v1::Pad;
 }  // namespace v1
+
+namespace v8 {
+using ov::op::v8::Pad;
+}  // namespace v8
 }  // namespace op
 }  // namespace ngraph
