@@ -190,7 +190,6 @@ struct CircularPad : PadBase {
         return std::addressof(coord);
     }
 };
-}  // namespace
 
 void pad(const char* data,
          const char* pad_value,
