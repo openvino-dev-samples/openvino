@@ -8,7 +8,7 @@
 #include "default_opset.hpp"
 #include <iostream>
 
-namespace ngraph {
+namespace ov {
 namespace frontend {
 namespace pdpd {
 namespace op {
