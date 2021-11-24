@@ -163,6 +163,25 @@ struct SymmetricAndReflectPad : PadBase {
     int axis_correction{};
 };
 
+<<<<<<< HEAD
+=======
+struct CircularPad : PadBase {
+    using PadBase::PadBase;
+
+    const Coordinate* transform_to_input_data_coord(const Coordinate& out_coord) const override {
+        assert(out_coord.size() == coord.size());
+
+        for (size_t i = 0; i != coord.size(); ++i) {
+            const auto sc = static_cast<std::ptrdiff_t>(out_coord[i]);
+
+            const auto cc = sc - padding_begin[i];
+            coord[i] = wrap<std::ptrdiff_t>(cc, data_shape[i]);
+        }
+        return std::addressof(coord);
+    }
+};
+
+>>>>>>> 127040643... Update pad.cpp
 void pad(const char* data,
          const char* pad_value,
          char* out,
