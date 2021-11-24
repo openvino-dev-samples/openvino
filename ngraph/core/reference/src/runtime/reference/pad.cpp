@@ -25,18 +25,6 @@ T clamp(T v, T lo, T hi) {
     }
     return v;
 }
-template <typename T>
-T wrap(T v, T max) {
-    if (v < 0) {
-        v += max;
-        return wrap(v, max);
-    }
-    if (v >= max) {
-        v -= max;
-        return wrap(v, max);
-    }
-    return v;
-}
 struct PadBase {
     PadBase(const char* const data,
             const char* const pad_value,
@@ -175,22 +163,6 @@ struct SymmetricAndReflectPad : PadBase {
     int axis_correction{};
 };
 
-struct CircularPad : PadBase {
-    using PadBase::PadBase;
-
-    const Coordinate* transform_to_input_data_coord(const Coordinate& out_coord) const override {
-        assert(out_coord.size() == coord.size());
-
-        for (size_t i = 0; i != coord.size(); ++i) {
-            const auto sc = static_cast<std::ptrdiff_t>(out_coord[i]);
-
-            const auto cc = sc - padding_begin[i];
-            coord[i] = wrap<std::ptrdiff_t>(cc, data_shape[i]);
-        }
-        return std::addressof(coord);
-    }
-};
-
 void pad(const char* data,
          const char* pad_value,
          char* out,
@@ -214,11 +186,6 @@ void pad(const char* data,
     case op::PadMode::REFLECT:
     case op::PadMode::SYMMETRIC: {
         impl::SymmetricAndReflectPad
-            pad{data, pad_value, out, elem_size, data_shape, out_shape, padding_below, padding_above, pad_mode};
-        pad.run();
-    } break;
-    case op::PadMode::CIRCULAR: {
-        impl::CircularPad
             pad{data, pad_value, out, elem_size, data_shape, out_shape, padding_below, padding_above, pad_mode};
         pad.run();
     } break;

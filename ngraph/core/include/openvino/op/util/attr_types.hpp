@@ -15,7 +15,7 @@
 namespace ov {
 namespace op {
 /// \brief Modes for the `Pad` operator.
-enum class PadMode { CONSTANT = 0, EDGE, REFLECT, SYMMETRIC, CIRCULAR };
+enum class PadMode { CONSTANT = 0, EDGE, REFLECT, SYMMETRIC };
 
 OPENVINO_API
 std::ostream& operator<<(std::ostream& s, const PadMode& type);

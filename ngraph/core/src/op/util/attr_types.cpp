@@ -19,8 +19,7 @@ NGRAPH_API EnumNames<ngraph::op::PadMode>& EnumNames<ngraph::op::PadMode>::get()
                                                             {{"constant", ngraph::op::PadMode::CONSTANT},
                                                              {"edge", ngraph::op::PadMode::EDGE},
                                                              {"reflect", ngraph::op::PadMode::REFLECT},
-                                                             {"symmetric", ngraph::op::PadMode::SYMMETRIC},
-                                                             {"circular", ngraph::op::PadMode::CIRCULAR}});
+                                                             {"symmetric", ngraph::op::PadMode::SYMMETRIC}});
     return enum_names;
 }
 
