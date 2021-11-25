@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 
+#include <iostream>
 #include <ngraph/opsets/opset6.hpp>
 #include <ngraph/opsets/opset8.hpp>
 #include <node_context.hpp>
+
 #include "default_opset.hpp"
-#include <iostream>
 
 namespace ov {
 namespace frontend {
@@ -25,11 +26,12 @@ NamedOutputs gather_tree(const NodeContext& node) {
     // preparing max_seq_len
     const auto value_node_max_time = default_opset::Constant::create(dtype, {1}, {max_time});
     const auto ids_shape = std::make_shared<ShapeOf>(data_ids);
-    const auto shape_node_max_seq_len = std::make_shared<StridedSlice>(ids_shape,
-                                          Constant::create(i64, Shape{1}, std::vector<int64_t>{1}),
-                                          Constant::create(i64, Shape{1}, std::vector<int64_t>{2}),
-                                          std::vector<int64_t>{0},   // begin mask
-                                          std::vector<int64_t>{0});  // end mask
+    const auto shape_node_max_seq_len =
+        std::make_shared<StridedSlice>(ids_shape,
+                                       Constant::create(i64, Shape{1}, std::vector<int64_t>{1}),
+                                       Constant::create(i64, Shape{1}, std::vector<int64_t>{2}),
+                                       std::vector<int64_t>{0},   // begin mask
+                                       std::vector<int64_t>{0});  // end mask
     const auto max_seq_len = std::make_shared<default_opset::Broadcast>(value_node_max_time, shape_node_max_seq_len);
 
     // preparing end_token
@@ -44,4 +46,4 @@ NamedOutputs gather_tree(const NodeContext& node) {
 }  // namespace op
 }  // namespace pdpd
 }  // namespace frontend
-}  // namespace ngraph
+}  // namespace ov

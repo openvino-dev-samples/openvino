@@ -9,10 +9,11 @@ import sys
 
 data_type = 'float32'
 
-def top_k(name : str, x, k:int):
-    
+
+def top_k(name: str, x, k: int):
+
     pdpd.enable_static()
-    
+
     with pdpd.static.program_guard(pdpd.static.Program(), pdpd.static.Program()):
         node_x = pdpd.static.data(name='x', shape=x.shape, dtype='float32')
         value, indices = fluid.layers.topk(node_x, k=k, name="top_k")
@@ -23,17 +24,19 @@ def top_k(name : str, x, k:int):
         exe.run(pdpd.static.default_startup_program())
         outs = exe.run(
             feed={'x': x},
-            fetch_list=[value,indices])
-            
-        saveModel(name, exe, feedkeys=['x'], fetchlist=[value,indices], inputs=[x], outputs=outs, target_dir=sys.argv[1])
+            fetch_list=[value, indices])
+
+        saveModel(name, exe, feedkeys=['x'], fetchlist=[value, indices], inputs=[
+                  x], outputs=outs, target_dir=sys.argv[1])
 
     return outs[0]
 
+
 def main():
-    data = np.random.random([2,3,8]).astype("float32")
+    data = np.random.random([2, 3, 8]).astype("float32")
     k = 3
     top_k("top_k", data, k=k)
 
 
 if __name__ == "__main__":
-    main()     
+    main()

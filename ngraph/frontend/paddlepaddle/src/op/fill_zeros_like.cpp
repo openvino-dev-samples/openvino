@@ -33,4 +33,4 @@ NamedOutputs fill_zeros_like(const NodeContext& node) {
 }  // namespace op
 }  // namespace pdpd
 }  // namespace frontend
-}  // namespace ngraph
+}  // namespace ov

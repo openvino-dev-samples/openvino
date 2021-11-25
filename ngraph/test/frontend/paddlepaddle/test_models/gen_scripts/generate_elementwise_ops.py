@@ -6,7 +6,7 @@ import sys
 from save_model import saveModel
 
 
-def elementwise_add(name : str, x, y, in_dtype):
+def elementwise_add(name: str, x, y, in_dtype):
     import paddle as pdpd
     pdpd.enable_static()
 
@@ -21,14 +21,15 @@ def elementwise_add(name : str, x, y, in_dtype):
         # startup program will call initializer to initialize the parameters.
         exe.run(pdpd.static.default_startup_program())
         outs = exe.run(
-        feed={'x': x, 'y': y},
-        fetch_list=[out])
-        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[x, y], outputs=[outs[0]], target_dir=sys.argv[1])
+            feed={'x': x, 'y': y},
+            fetch_list=[out])
+        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[
+                  x, y], outputs=[outs[0]], target_dir=sys.argv[1])
 
     return outs[0]
 
 
-def elementwise_sub(name : str, x, y, in_dtype):
+def elementwise_sub(name: str, x, y, in_dtype):
     import paddle as pdpd
     pdpd.enable_static()
 
@@ -43,20 +44,21 @@ def elementwise_sub(name : str, x, y, in_dtype):
         # startup program will call initializer to initialize the parameters.
         exe.run(pdpd.static.default_startup_program())
         outs = exe.run(
-        feed={'x': x, 'y': y},
-        fetch_list=[out])
-        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[x, y], outputs=[outs[0]], target_dir=sys.argv[1])
+            feed={'x': x, 'y': y},
+            fetch_list=[out])
+        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[
+                  x, y], outputs=[outs[0]], target_dir=sys.argv[1])
 
     return outs[0]
 
 
-def elementwise_div(name : str, x, y, in_dtype):
+def elementwise_div(name: str, x, y, in_dtype):
     import paddle as pdpd
     pdpd.enable_static()
 
     with pdpd.static.program_guard(pdpd.static.Program(), pdpd.static.Program()):
-        node_x = pdpd.static.data(name = 'x', shape = x.shape, dtype = in_dtype)
-        node_y = pdpd.static.data(name = 'y', shape = y.shape, dtype = in_dtype)
+        node_x = pdpd.static.data(name='x', shape=x.shape, dtype=in_dtype)
+        node_y = pdpd.static.data(name='y', shape=y.shape, dtype=in_dtype)
         out = pdpd.fluid.layers.nn.elementwise_div(node_x, node_y)
 
         cpu = pdpd.static.cpu_places(1)
@@ -65,20 +67,21 @@ def elementwise_div(name : str, x, y, in_dtype):
         # startup program will call initializer to initialize the parameters.
         exe.run(pdpd.static.default_startup_program())
         outs = exe.run(
-        feed={'x': x, 'y': y},
-        fetch_list=[out])
-        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[x, y], outputs=[outs[0]], target_dir=sys.argv[1])
+            feed={'x': x, 'y': y},
+            fetch_list=[out])
+        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[
+                  x, y], outputs=[outs[0]], target_dir=sys.argv[1])
 
     return outs[0]
 
 
-def elementwise_mul(name : str, x, y, in_dtype):
+def elementwise_mul(name: str, x, y, in_dtype):
     import paddle as pdpd
     pdpd.enable_static()
 
     with pdpd.static.program_guard(pdpd.static.Program(), pdpd.static.Program()):
-        node_x = pdpd.static.data(name = 'x', shape = x.shape, dtype = in_dtype)
-        node_y = pdpd.static.data(name = 'y', shape = y.shape, dtype = in_dtype)
+        node_x = pdpd.static.data(name='x', shape=x.shape, dtype=in_dtype)
+        node_y = pdpd.static.data(name='y', shape=y.shape, dtype=in_dtype)
         out = pdpd.fluid.layers.nn.elementwise_mul(node_x, node_y)
 
         cpu = pdpd.static.cpu_places(1)
@@ -87,20 +90,21 @@ def elementwise_mul(name : str, x, y, in_dtype):
         # startup program will call initializer to initialize the parameters.
         exe.run(pdpd.static.default_startup_program())
         outs = exe.run(
-        feed={'x': x, 'y': y},
-        fetch_list=[out])
-        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[x, y], outputs=[outs[0]], target_dir=sys.argv[1])
+            feed={'x': x, 'y': y},
+            fetch_list=[out])
+        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[
+                  x, y], outputs=[outs[0]], target_dir=sys.argv[1])
 
     return outs[0]
 
 
-def elementwise_min(name : str, x, y, in_dtype):
+def elementwise_min(name: str, x, y, in_dtype):
     import paddle as pdpd
     pdpd.enable_static()
 
     with pdpd.static.program_guard(pdpd.static.Program(), pdpd.static.Program()):
-        node_x = pdpd.static.data(name = 'x', shape = x.shape, dtype = in_dtype)
-        node_y = pdpd.static.data(name = 'y', shape = y.shape, dtype = in_dtype)
+        node_x = pdpd.static.data(name='x', shape=x.shape, dtype=in_dtype)
+        node_y = pdpd.static.data(name='y', shape=y.shape, dtype=in_dtype)
         out = pdpd.fluid.layers.nn.elementwise_min(node_x, node_y)
 
         cpu = pdpd.static.cpu_places(1)
@@ -111,18 +115,19 @@ def elementwise_min(name : str, x, y, in_dtype):
         outs = exe.run(
             feed={'x': x, 'y': y},
             fetch_list=[out])
-        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[x, y], outputs=[outs[0]], target_dir=sys.argv[1])
+        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[
+                  x, y], outputs=[outs[0]], target_dir=sys.argv[1])
 
     return outs[0]
 
 
-def elementwise_max(name : str, x, y, in_dtype):
+def elementwise_max(name: str, x, y, in_dtype):
     import paddle as pdpd
     pdpd.enable_static()
 
     with pdpd.static.program_guard(pdpd.static.Program(), pdpd.static.Program()):
-        node_x = pdpd.static.data(name = 'x', shape = x.shape, dtype = in_dtype)
-        node_y = pdpd.static.data(name = 'y', shape = y.shape, dtype = in_dtype)
+        node_x = pdpd.static.data(name='x', shape=x.shape, dtype=in_dtype)
+        node_y = pdpd.static.data(name='y', shape=y.shape, dtype=in_dtype)
         out = pdpd.fluid.layers.nn.elementwise_max(node_x, node_y)
 
         cpu = pdpd.static.cpu_places(1)
@@ -133,18 +138,19 @@ def elementwise_max(name : str, x, y, in_dtype):
         outs = exe.run(
             feed={'x': x, 'y': y},
             fetch_list=[out])
-        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[x, y], outputs=[outs[0]], target_dir=sys.argv[1])
+        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[
+                  x, y], outputs=[outs[0]], target_dir=sys.argv[1])
 
     return outs[0]
 
 
-def elementwise_pow(name : str, x, y, in_dtype):
+def elementwise_pow(name: str, x, y, in_dtype):
     import paddle as pdpd
     pdpd.enable_static()
 
     with pdpd.static.program_guard(pdpd.static.Program(), pdpd.static.Program()):
-        node_x = pdpd.static.data(name = 'x', shape = x.shape, dtype = in_dtype)
-        node_y = pdpd.static.data(name = 'y', shape = y.shape, dtype = in_dtype)
+        node_x = pdpd.static.data(name='x', shape=x.shape, dtype=in_dtype)
+        node_y = pdpd.static.data(name='y', shape=y.shape, dtype=in_dtype)
         out = pdpd.fluid.layers.nn.elementwise_pow(node_x, node_y)
 
         cpu = pdpd.static.cpu_places(1)
@@ -155,7 +161,8 @@ def elementwise_pow(name : str, x, y, in_dtype):
         outs = exe.run(
             feed={'x': x, 'y': y},
             fetch_list=[out])
-        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[x, y], outputs=[outs[0]], target_dir=sys.argv[1])
+        saveModel(name, exe, feedkeys=['x', 'y'], fetchlist=[out], inputs=[
+                  x, y], outputs=[outs[0]], target_dir=sys.argv[1])
 
     return outs[0]
 
