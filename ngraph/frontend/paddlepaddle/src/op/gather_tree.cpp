@@ -3,8 +3,6 @@
 //
 
 #include <iostream>
-#include <ngraph/opsets/opset6.hpp>
-#include <ngraph/opsets/opset8.hpp>
 #include <node_context.hpp>
 
 #include "default_opset.hpp"
@@ -13,9 +11,8 @@ namespace ov {
 namespace frontend {
 namespace pdpd {
 namespace op {
-using namespace opset8;
 using namespace element;
-
+using namespace default_opset;
 NamedOutputs gather_tree(const NodeContext& node) {
     auto data_ids = node.get_ng_input("Ids");
     auto data_parents = node.get_ng_input("Parents");
@@ -36,8 +33,8 @@ NamedOutputs gather_tree(const NodeContext& node) {
 
     // preparing end_token
     const auto value_node = default_opset::Constant::create(dtype, {1}, {0});
-    const auto axis = ngraph::opset6::Constant::create(dtype, Shape{}, {0});
-    auto end_token = std::make_shared<ngraph::opset6::Squeeze>(value_node, axis);
+    const auto axis = default_opset::Constant::create(dtype, Shape{}, {0});
+    auto end_token = std::make_shared<default_opset::Squeeze>(value_node, axis);
 
     return node.default_single_output_mapping(
         {std::make_shared<default_opset::GatherTree>(data_ids, data_parents, max_seq_len, end_token)},
