@@ -68,6 +68,7 @@ OP_CONVERTER(matrix_nms);
 OP_CONVERTER(meshgrid);
 OP_CONVERTER(multiclass_nms);
 OP_CONVERTER(nearest_interp_v2);
+OP_CONVERTER(one_hot_v2);
 OP_CONVERTER(p_norm);
 OP_CONVERTER(pad3d);
 OP_CONVERTER(pow);
@@ -87,6 +88,7 @@ OP_CONVERTER(rnn);
 OP_CONVERTER(roi_align);
 OP_CONVERTER(scale);
 OP_CONVERTER(select_input);
+OP_CONVERTER(set_value);
 OP_CONVERTER(shape);
 OP_CONVERTER(slice);
 OP_CONVERTER(softmax);
@@ -182,6 +184,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"nearest_interp_v2", op::nearest_interp_v2},
             {"nearest_interp", op::nearest_interp_v2},
             {"not_equal", op::elementwise_not_equal},
+            {"one_hot_v2", op::one_hot_v2},
             {"p_norm", op::p_norm},
             {"pad3d", op::pad3d},
             {"pow", op::pow},
@@ -201,6 +204,7 @@ std::map<std::string, CreatorFunction> get_supported_ops() {
             {"roi_align", op::roi_align},
             {"scale", op::scale},
             {"select_input", op::select_input},
+            {"set_value", op::set_value},
             {"shape", op::shape},
             {"slice", op::slice},
             {"softmax", op::softmax},
