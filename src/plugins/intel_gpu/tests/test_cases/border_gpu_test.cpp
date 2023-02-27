@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022 Intel Corporation
+// Copyright (C) 2018-2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -85,25 +85,7 @@ public:
                                    pad_mode,
                                    pad_value),
                             reorder("output", input_info("border"), cldnn::format::bfyx, T_dt));
-        std::shared_ptr<cldnn::network> target_network;
-
-        if (is_caching_test) {
-            membuf mem_buf;
-            {
-                cldnn::network _network(engine, target_topology);
-                std::ostream out_mem(&mem_buf);
-                BinaryOutputBuffer ob = BinaryOutputBuffer(out_mem);
-                _network.save(ob);
-            }
-            {
-                std::istream in_mem(&mem_buf);
-                BinaryInputBuffer ib = BinaryInputBuffer(in_mem, engine);
-                target_network = std::make_shared<cldnn::network>(ib, get_test_stream_ptr(), engine);
-            }
-        } else {
-            target_network = std::make_shared<cldnn::network>(engine, target_topology);
-        }
-
+        cldnn::network::ptr target_network = get_network(engine, target_topology, ExecutionConfig(), get_test_stream_ptr(), is_caching_test);
         target_network->set_input_data("input", input);
         auto target_output = target_network->execute().at("output").get_memory();
         cldnn::mem_lock<T> target_output_ptr(target_output, get_test_stream());
@@ -122,7 +104,7 @@ public:
         auto base_output = base_network.execute().at("border").get_memory();
         cldnn::mem_lock<T> base_output_ptr(base_output, get_test_stream());
 
-        EXPECT_TRUE(!memcmp(target_output_ptr.data(), base_output_ptr.data(), sizeof(T) * mult(sh_out)));
+        ASSERT_TRUE(!memcmp(target_output_ptr.data(), base_output_ptr.data(), sizeof(T) * mult(sh_out)));
     }
 };
 using border_test_i8 = border_test<char, data_types::i8>;
@@ -273,7 +255,7 @@ TEST(border_gpu, bsv16fsv16_without_reorder) {
                     b16f16_to_bfyx[index_bfyx(sh_out, b, f, y, x)] =
                         target_output_ptr.data()[index_bsv16fsv16(sh_out, b, f, y, x)];
 
-    EXPECT_TRUE(!memcmp(b16f16_to_bfyx.data(), base_output_ptr.data(), sizeof(T) * mult(sh_out)));
+    ASSERT_TRUE(!memcmp(b16f16_to_bfyx.data(), base_output_ptr.data(), sizeof(T) * mult(sh_out)));
 }
 
 TEST(border_gpu, zyx_bsv16fsv16) {
@@ -320,7 +302,7 @@ TEST(border_gpu, zyx_bsv16fsv16) {
     auto base_output = base_network.execute().at("border").get_memory();
     cldnn::mem_lock<T> base_output_ptr(base_output, get_test_stream());
 
-    EXPECT_TRUE(!memcmp(target_output_ptr.data(), base_output_ptr.data(), sizeof(T) * mult(sh_out)));
+    ASSERT_TRUE(!memcmp(target_output_ptr.data(), base_output_ptr.data(), sizeof(T) * mult(sh_out)));
 }
 
 TEST(border_gpu, basic_yxfb_0x0x1x2_0x0x3x4_border_constant) {
@@ -390,7 +372,7 @@ TEST(border_gpu, basic_yxfb_0x0x1x2_0x0x3x4_border_constant) {
                 for (auto x = 0; x < out_size_x; ++x) { // X
                     auto output_off = ((y * out_size_x + x) * out_size_f + f) * out_size_b + b; // YXFB
 
-                    EXPECT_EQ(output_ptr[output_off], out_data[output_off]);
+                    ASSERT_EQ(output_ptr[output_off], out_data[output_off]);
                 }
             }
         }
@@ -466,7 +448,7 @@ TEST(border_gpu, basic_fsv16_0x0x1x2_0x0x3x4_border_constant) {
                 for (auto x = 0; x < out_size_x; ++x) { // X
                     auto output_off = ((y * out_size_x + x) * out_size_f + f) * out_size_b + b; // YXFB
 
-                    EXPECT_EQ(output_ptr[output_off], out_data[output_off]);
+                    ASSERT_EQ(output_ptr[output_off], out_data[output_off]);
                 }
             }
         }
@@ -567,7 +549,7 @@ TEST(border_gpu, basic_bfzyx_0x0x1x01_0x0x0x0x3_border_constant) {
             for (auto z = 0; z < out_size_z; ++z) {     // z
                 for (auto y = 0; y < out_size_y; ++y) {     // Y
                     for (auto x = 0; x < out_size_x; ++x) { // X
-                        EXPECT_EQ(output_ptr[idx], out_data[idx]);
+                        ASSERT_EQ(output_ptr[idx], out_data[idx]);
                         idx++;
                     }
                 }
@@ -674,7 +656,7 @@ TEST(border_gpu, basic_bfwzyx_0x0x0x1x0x1_0x0x0x1x0x1_border_constant) {
                 for (auto z = 0; z < out_size_z; ++z) {     // z
                     for (auto y = 0; y < out_size_y; ++y) {     // Y
                         for (auto x = 0; x < out_size_x; ++x) { // X
-                            EXPECT_EQ(output_ptr[idx], out_data[idx]);
+                            ASSERT_EQ(output_ptr[idx], out_data[idx]);
                             idx++;
                         }
                     }
@@ -751,7 +733,7 @@ TEST(border_gpu, basic_yxfb_0x0x1x2_0x0x3x4_border_constant_non_constant) {
                 for (auto x = 0; x < out_size_x; ++x) { // X
                     auto output_off = ((y * out_size_x + x) * out_size_f + f) * out_size_b + b; // YXFB
 
-                    EXPECT_EQ(output_ptr[output_off], out_data[output_off]);
+                    ASSERT_EQ(output_ptr[output_off], out_data[output_off]);
                 }
             }
         }
@@ -824,7 +806,7 @@ TEST(border_gpu, basic_yxfb_0x0x1x2_0x0x3x4_border_mirror) {
                 for (auto x = 0; x < out_size_x; ++x) { // X
                     auto output_off = ((y * out_size_x + x) * out_size_f + f) * out_size_b + b; // YXFB
 
-                    EXPECT_EQ(output_ptr[output_off], out_data[output_off]);
+                    ASSERT_EQ(output_ptr[output_off], out_data[output_off]);
                 }
             }
         }
@@ -896,7 +878,7 @@ TEST(border_gpu, basic_bfzyx_0x0x0x0x1_0x0x0x0x1_border_mirror) {
 
                         auto input_off = (((in_b * in_size_f + in_f) * in_size_z + in_z) * in_size_y + in_y) * in_size_x + in_x; // BFZYX
 
-                        EXPECT_EQ(output_ptr[output_off], input_data[input_off]);
+                        ASSERT_EQ(output_ptr[output_off], input_data[input_off]);
                     }
                 }
             }
@@ -976,7 +958,7 @@ TEST(border_gpu, basic_bfzyxw_0x0x0x0x1_0x0x0x0x1_border_mirror) {
 
                             auto input_off = ((((in_b * in_size_f + in_f) * in_size_w + in_w)* in_size_z + in_z) * in_size_y + in_y) * in_size_x + in_x; // BFZYX
 
-                            EXPECT_EQ(output_ptr[output_off], input_data[input_off]);
+                            ASSERT_EQ(output_ptr[output_off], input_data[input_off]);
                         }
                     }
                 }
@@ -1053,7 +1035,7 @@ TEST(border_gpu, basic_yxfb_0x0x1x2_0x0x3x4_border_mirror_101) {
                 for (auto x = 0; x < out_size_x; ++x) { // X
                     auto output_off = ((y * out_size_x + x) * out_size_f + f) * out_size_b + b; // YXFB
 
-                    EXPECT_EQ(output_ptr[output_off], out_data[output_off]);
+                    ASSERT_EQ(output_ptr[output_off], out_data[output_off]);
                 }
             }
         }
@@ -1130,7 +1112,7 @@ TEST(border_gpu, basic_bfzyx_0x0x0x0x1_0x0x0x0x1_border_mirror_101) {
             for (auto z = 0; z < out_size_z; ++z) {         // Z
                 for (auto y = 0; y < out_size_y; ++y) {     // Y
                     for (auto x = 0; x < out_size_x; ++x) { // X
-                        EXPECT_EQ(output_ptr[idx], out_data[idx]);
+                        ASSERT_EQ(output_ptr[idx], out_data[idx]);
                         idx++;
                     }
                 }
@@ -1224,7 +1206,7 @@ TEST(border_gpu, basic_bfwzyx_0x0x0x0x1x1_0x0x0x0x1x1_border_mirror_101) {
                 for (auto z = 0; z < out_size_z; ++z) {         // Z
                     for (auto y = 0; y < out_size_y; ++y) {     // Y
                         for (auto x = 0; x < out_size_x; ++x) { // X
-                            EXPECT_EQ(output_ptr[idx], out_data[idx]);
+                            ASSERT_EQ(output_ptr[idx], out_data[idx]);
                             idx++;
                         }
                     }
@@ -1302,7 +1284,7 @@ TEST(border_gpu, basic_yxfb_0x0x1x2_0x0x3x4_border_edge) {
                 for (auto x = 0; x < out_size_x; ++x) { // X
                     auto output_off = ((y * out_size_x + x) * out_size_f + f) * out_size_b + b; // YXFB
 
-                    EXPECT_EQ(output_ptr[output_off], out_data[output_off]);
+                    ASSERT_EQ(output_ptr[output_off], out_data[output_off]);
                 }
             }
         }
@@ -1365,12 +1347,12 @@ TEST(border_gpu, basic_bfyx_2x1x2x3_1x2x3x4_border_constant) {
                         y < blt_size_y || y >= out_size_y - brb_size_y ||
                         x < blt_size_x || x >= out_size_x - brb_size_x)
                     {
-                        EXPECT_EQ(output_ptr[output_off], 0.0f);
+                        ASSERT_EQ(output_ptr[output_off], 0.0f);
                     }
                     else
                     {
                         auto input_off  = (((b - blt_size_b) * in_size_f + f - blt_size_f) * in_size_y + y - blt_size_y) * in_size_x + x - blt_size_x; // BFYX
-                        EXPECT_EQ(output_ptr[output_off], input_data[input_off]);
+                        ASSERT_EQ(output_ptr[output_off], input_data[input_off]);
                     }
                 }
             }
@@ -1435,7 +1417,7 @@ TEST(border_gpu, basic_bfyx_2x1x2x3_1x2x3x4_border_mirror) {
 
                     auto input_off  = ((in_b * in_size_f + in_f) * in_size_y + in_y) * in_size_x + in_x; // BFYX
 
-                    EXPECT_EQ(output_ptr[output_off], input_data[input_off]);
+                    ASSERT_EQ(output_ptr[output_off], input_data[input_off]);
                 }
             }
         }
@@ -1498,7 +1480,7 @@ TEST(border_gpu, basic_bfyx_2x1x2x3_1x2x3x4_border_mirror_101) {
 
                     auto input_off  = ((in_b * in_size_f + in_f) * in_size_y + in_y) * in_size_x + in_x; // BFYX
 
-                    EXPECT_EQ(output_ptr[output_off], input_data[input_off]);
+                    ASSERT_EQ(output_ptr[output_off], input_data[input_off]);
                 }
             }
         }
@@ -1561,7 +1543,7 @@ TEST(border_gpu, basic_bfyx_2x1x2x3_1x2x3x4_border_edge) {
 
                     auto input_off  = ((in_b * in_size_f + in_f) * in_size_y + in_y) * in_size_x + in_x; // BFYX
 
-                    EXPECT_EQ(output_ptr[output_off], input_data[input_off]);
+                    ASSERT_EQ(output_ptr[output_off], input_data[input_off]);
                 }
             }
         }

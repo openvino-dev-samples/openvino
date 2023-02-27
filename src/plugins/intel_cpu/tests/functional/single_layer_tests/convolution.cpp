@@ -1,4 +1,4 @@
-// Copyright (C) 2018-2022 Intel Corporation
+// Copyright (C) 2018-2023 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 //
 
@@ -91,6 +91,8 @@ protected:
     InferenceEngine::SizeVector kernel, dilation;
 
     void checkBiasFusing(ov::CompiledModel &execNet) const {
+        if (!execNet) return;
+
         auto execGraph = execNet.get_runtime_model();
         ASSERT_NE(nullptr, execGraph);
 
@@ -202,8 +204,6 @@ protected:
 };
 
 TEST_P(ConvolutionLayerCPUTest, CompareWithRefs) {
-    SKIP_IF_CURRENT_TEST_IS_DISABLED()
-
     // Skip tests for sse41 convolution where ic or oc cannot be exactly divided by the block size,
     // since tails processing for sse41 nspc layout is not supported yet (see 52736).
     if (!inFmts.empty() && (inFmts.front() == nwc || inFmts.front() == nhwc || inFmts.front() == ndhwc) && selectedType.find("jit_sse") != std::string::npos) {
