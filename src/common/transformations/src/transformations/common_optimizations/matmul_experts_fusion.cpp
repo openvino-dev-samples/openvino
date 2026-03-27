@@ -174,9 +174,18 @@ FuseVectorizedMOE3GEMM::FuseVectorizedMOE3GEMM() {
 
         auto experts_input_node = pm.at(experts_input).get_node()->input_value(0);
         auto routing_weights_node = pm.at(unsqueeze_routing_weights).get_node_shared_ptr();
-        auto gate_weight = pm.at(gate_matmul).get_node()->input_value(1).get_node_shared_ptr();
-        auto up_weight = pm.at(up_matmul).get_node()->input_value(1).get_node_shared_ptr();
-        auto down_weight = pm.at(down_matmul).get_node()->input_value(1).get_node_shared_ptr();
+        // Look through Transpose nodes that may have been inserted by VectorizedMOE3GEMMTransposeWeights,
+        // so that ConvertMOEToMOECompressed can match the compressed weight decompression chain.
+        auto get_weight = [](const std::shared_ptr<ov::Node>& matmul_node, int port) -> std::shared_ptr<ov::Node> {
+            auto weight = matmul_node->input_value(port).get_node_shared_ptr();
+            if (ov::as_type_ptr<v1::Transpose>(weight)) {
+                weight = weight->input_value(0).get_node_shared_ptr();
+            }
+            return weight;
+        };
+        auto gate_weight = get_weight(pm.at(gate_matmul).get_node_shared_ptr(), 1);
+        auto up_weight = get_weight(pm.at(up_matmul).get_node_shared_ptr(), 1);
+        auto down_weight = get_weight(pm.at(down_matmul).get_node_shared_ptr(), 1);
         auto topk_indices_node = pm.at(scatter_elements_update).get_node()->input_value(1);
 
         ov::OutputVector moe_inputs = {

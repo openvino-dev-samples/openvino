@@ -120,6 +120,7 @@
 #include "transformations/common_optimizations/move_eltwise_up_data_movement.hpp"
 #include "transformations/common_optimizations/mvn_fusion.hpp"
 #include "transformations/common_optimizations/matmul_experts_fusion.hpp"
+#include "transformations/common_optimizations/moe_transpose_weights.hpp"
 #include "transformations/common_optimizations/nop_elimination.hpp"
 #include "transformations/common_optimizations/rms_fusion.hpp"
 #include "transformations/common_optimizations/sdpa_scale_fusion.hpp"
@@ -468,10 +469,9 @@ void TransformationsPipeline::apply(std::shared_ptr<ov::Model> func) {
             ov::disable_keep_const_precision(node);
         }
 
-        manager.register_pass<ov::pass::TransposeMatMul>();
-        manager.register_pass<ov::pass::MarkDequantization>(
-            std::vector<ov::element::Type>{ ov::element::i8, ov::element::u8, ov::element::i4, ov::element::u4 },
-            !device_info.supports_immad);
+        // MoE fusion passes run BEFORE TransposeMatMul to prevent TransposeMatMul
+        // from absorbing Transpose nodes inserted by VectorizedMOE3GEMMTransposeWeights
+        // (which would toggle transpose_b back to false and prevent FuseVectorizedMOE3GEMM from matching).
         const bool disable_moe_opt = GPU_DEBUG_VALUE_OR(config.get_disable_moe_opt(), false);
         if (!disable_moe_opt) {
             manager.register_pass<ov::pass::FuseVectorizedMOE2GEMM>();
@@ -482,6 +482,7 @@ void TransformationsPipeline::apply(std::shared_ptr<ov::Model> func) {
                 return (info.arch != cldnn::gpu_arch::xe2) && (info.arch != cldnn::gpu_arch::xe3);
             });
 
+            manager.register_pass<ov::pass::VectorizedMOE3GEMMTransposeWeights>();
             manager.register_pass<ov::pass::FuseVectorizedMOE3GEMM>();
             pass_config->set_callback<ov::pass::FuseVectorizedMOE3GEMM>([&](const_node_ptr& root) -> bool {
                 // Currently moe gemm3 is only supported by systolic-array architectures
@@ -500,6 +501,11 @@ void TransformationsPipeline::apply(std::shared_ptr<ov::Model> func) {
             manager.register_pass<ov::intel_gpu::ConvertMOEToMOECompressed>(is_pa);
             manager.register_pass<ov::intel_gpu::FuseMOE3GemmCompressed>();
         }
+
+        manager.register_pass<ov::pass::TransposeMatMul>();
+        manager.register_pass<ov::pass::MarkDequantization>(
+            std::vector<ov::element::Type>{ ov::element::i8, ov::element::u8, ov::element::i4, ov::element::u4 },
+            !device_info.supports_immad);
 
         manager.register_pass<ov::pass::InitNodeInfo>();
         manager.register_pass<EinsumDecomposition>();

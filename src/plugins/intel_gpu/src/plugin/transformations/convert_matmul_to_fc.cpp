@@ -78,7 +78,7 @@ ConvertMatMulToFullyConnected::ConvertMatMulToFullyConnected(bool supports_immad
         }
 
         auto transpose_node = ov::as_type_ptr<ov::op::v1::Transpose>(fc_input_b.get_node_shared_ptr());
-        if (transpose_node) {
+        if (transpose_node && !matmul->get_transpose_b()) {
             fc_input_b = transpose_node->input_value(0);
         }
 
