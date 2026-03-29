@@ -87,12 +87,15 @@ KERNEL(sigmoid_bias_topk)(
 
     input += batch * sort_cnt + sort_index;
 
-    __local MOE_DTYPE local_sigmoid[VALUE_NUM];     // raw sigmoid values
-    __local MOE_DTYPE local_selection[VALUE_NUM];   // sigmoid + bias (for sorting)
-    __local MOE_DTYPE local_output[TOP_K];
+    // Use float for sigmoid/selection to preserve precision during expert selection.
+    // FP16 has only ~3.3 decimal digits — with many experts and close sigmoid scores,
+    // FP16 sorting can select different experts than FP32, causing large output divergence.
+    __local float local_sigmoid[VALUE_NUM];       // raw sigmoid values (float precision)
+    __local float local_selection[VALUE_NUM];     // sigmoid + bias for sorting (float precision)
+    __local float local_output[TOP_K];
     __local uint local_index[TOP_K];
 
-    // Compute sigmoid
+    // Compute sigmoid in float precision
 #if MOE_DTYPE_SIZE == 2
     MOE_DTYPE in_value = as_half(intel_sub_group_block_read_us((const __global ushort*)(input)));
 #elif MOE_DTYPE_SIZE == 4
@@ -100,11 +103,11 @@ KERNEL(sigmoid_bias_topk)(
 #else
 #    error "sigmoid_bias_topk: unsupported MOE_DTYPE_SIZE"
 #endif
-    MOE_DTYPE sigmoid_val = (MOE_DTYPE)(1.0f / (1.0f + native_exp(-(float)in_value)));
+    float sigmoid_val = 1.0f / (1.0f + native_exp(-(float)in_value));
 
     // Add bias for selection (determines which experts are chosen)
-    MOE_DTYPE bias_val = bias[sort_index];
-    MOE_DTYPE selection_val = sigmoid_val + bias_val;
+    float bias_val = (float)bias[sort_index];
+    float selection_val = sigmoid_val + bias_val;
 
     local_sigmoid[sort_index] = sigmoid_val;
     local_selection[sort_index] = selection_val;
@@ -116,7 +119,7 @@ KERNEL(sigmoid_bias_topk)(
 
     __attribute__((opencl_unroll_hint(8)))
     for(uint i = 0; i < sort_index; i++) {
-        MOE_DTYPE value = local_selection[i];
+        float value = local_selection[i];
         if(value >= selection_val) {
             sort_position++;
         }
@@ -124,7 +127,7 @@ KERNEL(sigmoid_bias_topk)(
 
     __attribute__((opencl_unroll_hint(8)))
     for(uint i = sort_index; i < sort_cnt; i++) {
-        MOE_DTYPE value = local_selection[i];
+        float value = local_selection[i];
         if(value > selection_val) {
             sort_position++;
         }
@@ -141,7 +144,7 @@ KERNEL(sigmoid_bias_topk)(
     if(sort_position == 0) {
         float sum_weights = 0.0f;
         for(uint i = 0; i < actual_topk; i++) {
-            sum_weights += (float)local_output[i];
+            sum_weights += local_output[i];
         }
         sum_weights += (float)eps_ptr[0];  // epsilon to avoid division by zero
 
@@ -149,7 +152,7 @@ KERNEL(sigmoid_bias_topk)(
         output += batch * TOP_K;
 
         for(uint i = 0; i < actual_topk; i++) {
-            output[i] = (MOE_DTYPE)((float)local_output[i] / sum_weights);
+            output[i] = (MOE_DTYPE)(local_output[i] / sum_weights);
             output_index[i] = local_index[i];
         }
         // Zero out remaining positions if TOP_K > actual_topk
