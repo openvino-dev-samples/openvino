@@ -20,7 +20,11 @@
 DECLARE_2D_TILE(bias_tile_type, BIAS_DT, SUBGROUP_SIZE, ugemm_moe_sg_tile_m, 1, 1, 1)
 #endif
 DECLARE_2D_TILE(ugemm_moe_c_type_half, half, SUBGROUP_SIZE, ugemm_moe_c_type_block0, ugemm_moe_c_type_block1, ugemm_moe_c_type_nblock0, ugemm_moe_c_type_nblock1)
+// Float tile for post-processing to avoid FP16 precision loss after GEMM (critical for INT4 weights)
+DECLARE_2D_TILE(ugemm_moe_c_type_float, float, SUBGROUP_SIZE, ugemm_moe_c_type_block0, ugemm_moe_c_type_block1, ugemm_moe_c_type_nblock0, ugemm_moe_c_type_nblock1)
 DECLARE_2D_TILE_COPY_REBLOCK(ugemm_moe_c_type, SUBGROUP_SIZE, ugemm_moe_c_type_block0, ugemm_moe_c_type_block1, ugemm_moe_c_type_nblock0, ugemm_moe_c_type_nblock1,
+                             ugemm_moe_c_type_float, SUBGROUP_SIZE, ugemm_moe_c_type_block0, ugemm_moe_c_type_block1, ugemm_moe_c_type_nblock0, ugemm_moe_c_type_nblock1)
+DECLARE_2D_TILE_COPY_REBLOCK(ugemm_moe_c_type_float, SUBGROUP_SIZE, ugemm_moe_c_type_block0, ugemm_moe_c_type_block1, ugemm_moe_c_type_nblock0, ugemm_moe_c_type_nblock1,
                              ugemm_moe_c_type_half, SUBGROUP_SIZE, ugemm_moe_c_type_block0, ugemm_moe_c_type_block1, ugemm_moe_c_type_nblock0, ugemm_moe_c_type_nblock1)
 
 #define unroll_for __attribute__((opencl_unroll_hint)) for
@@ -130,8 +134,9 @@ KERNEL(moe_gemm)(OPTIONAL_SHAPE_INFO_ARG
     if (sg_k > 0)
         return;
 
-    ugemm_moe_c_type_half c_tile_half;
-    tile_copy_reblock(c_tile, &c_tile_half);
+    // Use float tile for post-processing to preserve precision (critical for INT4 weights)
+    ugemm_moe_c_type_float c_tile_float;
+    tile_copy_reblock(c_tile, &c_tile_float);
 
 #ifdef BIAS_DT
     bias_ptr += (expert_id * BIAS_STRIDE);
@@ -146,7 +151,7 @@ KERNEL(moe_gemm)(OPTIONAL_SHAPE_INFO_ARG
             for (int i0 = 0; i0 < br * nbr; i0 += sg) {
                 int i = i0 + sglid;
                 if (sg_i0 + i < m) {
-                    c_tile_half.x[i0 / br + nbr * (j / bc)][(i0 % br)/sg + (j % bc) * (br / sg)] += bias_ptr[sg_i0 + i];
+                    c_tile_float.x[i0 / br + nbr * (j / bc)][(i0 % br)/sg + (j % bc) * (br / sg)] += (float)bias_ptr[sg_i0 + i];
                 }
             }
         }
@@ -172,9 +177,9 @@ KERNEL(moe_gemm)(OPTIONAL_SHAPE_INFO_ARG
                         float post_val = post_op_row[i];
                         int reg_idx_i = (i0 / br) + nbr * (j / bc);
                         int reg_idx_j = (i0 % br)/sg + (j % bc) * (br / sg);
-                        float val = c_tile_half.x[reg_idx_i][reg_idx_j];
-                        float res = post_val * (val / (1.0f + native_exp(-val)));
-                        c_tile_half.x[reg_idx_i][reg_idx_j] = res;
+                        float val = c_tile_float.x[reg_idx_i][reg_idx_j];
+                        float res = post_val * (val / (1.0f + exp(-val)));
+                        c_tile_float.x[reg_idx_i][reg_idx_j] = res;
                     }
                 }
             }
@@ -182,5 +187,12 @@ KERNEL(moe_gemm)(OPTIONAL_SHAPE_INFO_ARG
     }
 #endif
 
+    // Convert float to half only at final store (preserves precision for INT4 weights)
+#ifdef OUTPUT_F32
+    tile_store(c_tile_float, out_ptr, m, cur_n_tokens, sg_i0, sg_j0);
+#else
+    ugemm_moe_c_type_half c_tile_half;
+    tile_copy_reblock(c_tile_float, &c_tile_half);
     tile_store(c_tile_half, out_ptr, m, cur_n_tokens, sg_i0, sg_j0);
+#endif
 }

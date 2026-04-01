@@ -58,7 +58,7 @@ KERNEL(softmax_topk)(
         MOE_DTYPE max_v = local_output[0];
         local_output[0] = 1;
         for(uint i = 1; i < TOP_K; i++) {
-            local_output[i] = native_exp(local_output[i] - max_v);
+            local_output[i] = exp(local_output[i] - max_v);
             softmax_total += local_output[i];
         }
         output_index += batch * TOP_K;
@@ -103,7 +103,7 @@ KERNEL(sigmoid_bias_topk)(
 #else
 #    error "sigmoid_bias_topk: unsupported MOE_DTYPE_SIZE"
 #endif
-    float sigmoid_val = 1.0f / (1.0f + native_exp(-(float)in_value));
+    float sigmoid_val = 1.0f / (1.0f + exp(-(float)in_value));
 
     // Add bias for selection (determines which experts are chosen)
     float bias_val = (float)bias[sort_index];
@@ -202,29 +202,54 @@ KERNEL (gather_2d_ref)(
 }
 
 #elif SCATTER_ENABLE
+// Accumulate expert outputs into an FP32 buffer to avoid FP16 truncation at each step.
+// With 16 experts, accumulating in FP16 loses ~1-2 bits per step (16 steps = catastrophic).
+// The FP32 buffer is converted to FP16 once after all experts are done (see SCATTER_F32_TO_F16_ENABLE).
 KERNEL (index_add_)(const __global MOE_DTYPE* src_tok,
     __global int * tok_index,
-    __global MOE_DTYPE* dst_tok) {
+    __global float* dst_tok_f32) {
 
     int k = get_global_id(0);
     int off = get_global_id(1);
     int tok_idx = tok_index[k];
 
     src_tok += k * HIDDEN_SIZE;
-    dst_tok += tok_idx * HIDDEN_SIZE;
+    dst_tok_f32 += tok_idx * HIDDEN_SIZE;
 
     #if MOE_DTYPE_SIZE == 2
-        half src_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(src_tok + off)));
-        half dst_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(dst_tok + off)));
-        half value = dst_value + src_value;
-        intel_sub_group_block_write_us((__global ushort *)(dst_tok + off), as_ushort(value));
+        float src_value = (float)as_half(intel_sub_group_block_read_us((const __global ushort *)(src_tok + off)));
+        float dst_value = as_float(intel_sub_group_block_read((const __global uint *)(dst_tok_f32 + off)));
+        float value = dst_value + src_value;
+        intel_sub_group_block_write((__global uint *)(dst_tok_f32 + off), as_uint(value));
     #elif MOE_DTYPE_SIZE == 4
         float src_value = as_float(intel_sub_group_block_read((const __global uint *)(src_tok + off)));
-        float dst_value = as_float(intel_sub_group_block_read((const __global uint *)(dst_tok + off)));
+        float dst_value = as_float(intel_sub_group_block_read((const __global uint *)(dst_tok_f32 + off)));
         float value = dst_value + src_value;
-        intel_sub_group_block_write_us((__global ushort *)(dst_tok + off), as_uint(value));
+        intel_sub_group_block_write((__global uint *)(dst_tok_f32 + off), as_uint(value));
     #else
-        dst_tok[off] += src_tok[off];
+        dst_tok_f32[off] += (float)src_tok[off];
+    #endif
+}
+
+#elif SCATTER_F32_TO_F16_ENABLE
+// Final conversion: FP32 accumulation buffer → FP16 output
+KERNEL (scatter_f32_to_f16)(const __global float* src_f32,
+    __global MOE_DTYPE* dst) {
+
+    int idx = get_global_id(0);
+    int off = get_global_id(1);
+
+    src_f32 += idx * HIDDEN_SIZE;
+    dst += idx * HIDDEN_SIZE;
+
+    #if MOE_DTYPE_SIZE == 2
+        float value = as_float(intel_sub_group_block_read((const __global uint *)(src_f32 + off)));
+        intel_sub_group_block_write_us((__global ushort *)(dst + off), as_ushort((half)value));
+    #elif MOE_DTYPE_SIZE == 4
+        float value = as_float(intel_sub_group_block_read((const __global uint *)(src_f32 + off)));
+        intel_sub_group_block_write((__global uint *)(dst + off), as_uint(value));
+    #else
+        dst[off] = (MOE_DTYPE)src_f32[off];
     #endif
 }
 
@@ -248,14 +273,14 @@ KERNEL(swiglu_ref) (
     const uint offset = token_idx * INTERMEDIA_SIZE + n_offset - sg_id;
     ACC_DTYPE up_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(up + offset)));
     ACC_DTYPE gate_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(gate + offset)));
-    ACC_DTYPE value = gate_value / (1.0f + native_exp(-SWISH_BETA * gate_value));
+    ACC_DTYPE value = gate_value / (1.0f + exp(-SWISH_BETA * gate_value));
     half result = value * up_value;
     intel_sub_group_block_write_us((__global ushort *)(output + offset), as_ushort(result));
 #else
     const uint offset = token_idx * INTERMEDIA_SIZE + n_offset;
     ACC_DTYPE gate_value = gate[offset];
     ACC_DTYPE up_value = up[offset];
-    ACC_DTYPE value = gate_value / (1.0f + native_exp(-SWISH_BETA * gate_value));
+    ACC_DTYPE value = gate_value / (1.0f + exp(-SWISH_BETA * gate_value));
     ACC_DTYPE result = value * up_value;
     output[offset] = result;
 #endif

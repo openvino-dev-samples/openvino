@@ -84,7 +84,8 @@ struct onednn_matmul {
             m_M = batch_size;
         }
         if (ic_group_size >= 0) {
-            w_scale(ic_group_size).w_zp(ic_group_size).fpmath_f16();
+            w_scale(ic_group_size).w_zp(ic_group_size);
+            fpmath_f16();
         }
     }
 
@@ -653,6 +654,31 @@ protected:
     }
 };
 
+class MoE3GemmSwigluScatterF32ToF16 : public KernelGenerator {
+public:
+    MoE3GemmSwigluScatterF32ToF16() : KernelGenerator("moe_3gemm_swiglu_fuse", "scatter_f32_to_f16") {}
+
+protected:
+    [[nodiscard]] JitConstants get_jit_constants(const RuntimeParams& params) const override {
+        auto jit = KernelGenerator::get_jit_constants(params);
+        auto desc = params.typed_desc<moe_3gemm_fused_compressed>();
+        jit.make("SCATTER_F32_TO_F16_ENABLE", 1);
+        jit.make("HIDDEN_SIZE", desc->_config.hidden_size);
+        jit.make("MOE_DTYPE", params.get_input_layout(0).data_type == ov::element::f16 ? "half" : "float");
+        jit.make("MOE_DTYPE_SIZE", params.get_input_layout(0).data_type == ov::element::f16 ? 2 : 4);
+        return jit;
+    }
+
+    [[nodiscard]] Arguments get_arguments_desc(const RuntimeParams& params) const override {
+        Arguments args;
+        return args;
+    }
+
+    [[nodiscard]] DispatchDataFunc get_dispatch_data_func() const override {
+        return DispatchDataFunc{[](const RuntimeParams& params, KernelData& kd, ImplRuntimeParams* rt_params) {}};
+    }
+};
+
 // Performance tuning parameters
 #    define N_BLOCK      4
 #    define SUBGROUP_NUM 8
@@ -784,6 +810,7 @@ public:
     Stage::Ptr sigmoid_bias_topk = make_stage<MoE3GemmSwigluSigmoidBiasTopK>();
     Stage::Ptr gather = make_stage<MoE3GemmSwigluGather>();
     Stage::Ptr scatter = make_stage<MoE3GemmSwigluScatter>();
+    Stage::Ptr scatter_f32_to_f16 = make_stage<MoE3GemmSwigluScatterF32ToF16>();
     Stage::Ptr mlp_gate_up = make_stage<MoE3GemmSwigluMLPGateUp>();
     Stage::Ptr mlp_down = make_stage<MoE3GemmSwigluMLPDown>();
     Stage::Ptr mlp_reduce = make_stage<MoE3GemmSwigluMLPReduce>();
@@ -841,6 +868,8 @@ public:
         memory::ptr x;
         memory::ptr routing_weights;
         memory::ptr gate;
+        // FP32 accumulation buffer for scatter/index_add_ to avoid FP16 truncation per expert
+        memory::ptr acc_f32;
         // buffers for batch and topk from cpu, each expert has one
         std::vector<expert_mask_gpu> expert_masks;
 
@@ -1058,7 +1087,20 @@ public:
             internal_buffers.emplace_back(layout_token_idx, true);  // 12: token idx per expert
             layout layout_actual_used_expert_num(ov::Shape{1}, ov::element::i32, cldnn::format::bfyx);
             internal_buffers.emplace_back(layout_actual_used_expert_num, false);  // 13: actual_used_expert_num
+        } else {
+            // Reserve slots 9-13 even when not using micro_gemm to keep buffer indices consistent
+            layout dummy_layout(ov::Shape{1}, ov::element::i32, cldnn::format::bfyx);
+            internal_buffers.emplace_back(dummy_layout, true);   // 9: placeholder
+            internal_buffers.emplace_back(dummy_layout, true);   // 10: placeholder
+            internal_buffers.emplace_back(dummy_layout, true);   // 11: placeholder
+            internal_buffers.emplace_back(dummy_layout, true);   // 12: placeholder
+            internal_buffers.emplace_back(dummy_layout, false);  // 13: placeholder
         }
+
+        // FP32 accumulation buffer for scatter — avoids FP16 truncation per expert
+        layout layout_acc_f32(ov::Shape{token_num, static_cast<size_t>(config.hidden_size)}, ov::element::f32, cldnn::format::bfyx);
+        internal_buffers.emplace_back(layout_acc_f32, true);  // 14: acc_f32
+
         return internal_buffers;
     }
 
@@ -1099,6 +1141,9 @@ public:
         scratch.moe_fusion_wei_addr.weight[2] = instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::WEIGHT_2));
         scratch.moe_fusion_wei_addr.scale[2] = instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::SCALE_2));
         scratch.moe_fusion_wei_addr.zp[2] = instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::ZP_2));
+
+        // FP32 accumulation buffer for scatter
+        scratch.acc_f32 = intermediates_memories[MOE_INTERNAL_BUFFER_ACC_F32];
     }
 
     void get_expert_mask_from_gpu(const MOE3GemmFusedCompressed::Config& config, memory::ptr mem, stream& stream, expert_mask_cpu& expert_mask) {
@@ -1748,16 +1793,27 @@ public:
                                 convert2dnnl(scratch.y, {static_cast<int64_t>(n_token), _hidden_size}, dnnl::memory::format_tag::ab),
                                 convert2dnnl(scratch.routing_weights, {static_cast<int64_t>(routing_weights_size)}, dnnl::memory::format_tag::a));
 
-            // index_add
+            // index_add — accumulate into FP32 buffer to avoid FP16 truncation per expert
             result_event = execute_stage({result_event},
                                          instance,
                                          *scatter,
                                          {scratch.y, expert_mask_mem.batch},
-                                         {final_hidden_states_mem_ptr},
+                                         {scratch.acc_f32},
                                          {static_cast<size_t>(n_token), static_cast<size_t>(_hidden_size)},
                                          {1, lws_size},
                                          true /*instance.needs_completion_event()*/);
         }
+
+        // Convert FP32 accumulation buffer to FP16 output
+        auto token_num = get_seq_len(hidden_states_layout);
+        result_event = execute_stage({result_event},
+                                     instance,
+                                     *scatter_f32_to_f16,
+                                     {scratch.acc_f32},
+                                     {final_hidden_states_mem_ptr},
+                                     {static_cast<size_t>(token_num), static_cast<size_t>(_hidden_size)},
+                                     {1, lws_size},
+                                     true);
 
         return result_event;
     }
@@ -1809,10 +1865,9 @@ public:
             return exec_single_token({topk_event}, instance, scratch);
         }
 
-        // onednn path will accumulate to the output
+        // onednn path will accumulate to FP32 buffer first, then convert to output
         if (!use_micro_gemm_prefill) {
-            auto final_hidden_states_mem_ptr = instance.output_memory_ptr(0);
-            final_hidden_states_mem_ptr->fill(stream, false);
+            scratch.acc_f32->fill(stream, false);
         }
         const bool use_gpu_mask_gen = use_gpu_mask_gen_prefill;
         if (!use_gpu_mask_gen) {

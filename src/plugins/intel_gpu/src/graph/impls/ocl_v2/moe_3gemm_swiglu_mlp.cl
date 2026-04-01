@@ -716,13 +716,11 @@ __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE))) KERNEL(mlp_down)(const
 __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE))) KERNEL(mlp_reduce)(const __global MOE_DTYPE* x,  // [MAX_TOPK, HIDDEN_SIZE]
                                                                              __global MOE_DTYPE* y) {      // [1, HIDDEN_SIZE]
     int n = get_global_id(1);
-    half sum[MAX_TOPK] = {0};
+    // Use float accumulation to reduce FP16 rounding error when summing expert outputs
+    float acc = 0.0f;
     __attribute__((opencl_unroll_hint(MAX_TOPK))) for (int i = 0; i < MAX_TOPK; i++) {
-        sum[i] = as_half(intel_sub_group_block_read_us((const __global ushort*)(x + i * HIDDEN_SIZE + n)));
+        acc += (float)as_half(intel_sub_group_block_read_us((const __global ushort*)(x + i * HIDDEN_SIZE + n)));
     }
-    for (int i = 1; i < MAX_TOPK; i++) {
-        sum[0] += sum[i];
-    }
-    intel_sub_group_block_write_us((__global ushort*)(y + n), as_ushort(sum[0]));
+    intel_sub_group_block_write_us((__global ushort*)(y + n), as_ushort((half)acc));
 }
 #endif

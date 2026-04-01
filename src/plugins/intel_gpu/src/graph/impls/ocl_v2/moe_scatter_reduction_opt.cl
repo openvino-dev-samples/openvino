@@ -8,6 +8,10 @@
 #define VSTORE CAT(vstore, VEC_BLK_SIZE)
 #define INPUT_VEC_TYPE  MAKE_VECTOR_TYPE(INPUT0_TYPE, VEC_BLK_SIZE)
 #define OUTPUT_VEC_TYPE MAKE_VECTOR_TYPE(OUTPUT_TYPE, VEC_BLK_SIZE)
+// Use float accumulator to reduce FP16 rounding error when summing many expert outputs
+#define ACC_VEC_TYPE    MAKE_VECTOR_TYPE(float, VEC_BLK_SIZE)
+#define TO_ACC_VEC_TYPE CAT(convert_float, VEC_BLK_SIZE)
+#define TO_OUTPUT_VEC_TYPE CAT(CAT(convert_, OUTPUT_TYPE), VEC_BLK_SIZE)
 
 KERNEL(moe_scatter_reduction_ref)(
     OPTIONAL_SHAPE_INFO_ARG
@@ -27,7 +31,7 @@ KERNEL(moe_scatter_reduction_ref)(
     const uint token_group_id = (uint)get_group_id(0);
     const uint threads_index = (uint)get_local_id(0);
 
-    OUTPUT_VEC_TYPE output_vec[BATCHES_PER_THREAD];
+    ACC_VEC_TYPE output_vec[BATCHES_PER_THREAD];
     // start_offset_idx[i] = n : info for i-th expert in this thread is in the nth slot of the mask
     __local uint start_offset_index[ACTIVE_EXPERTS];
     __local uint expert_input_offsets[ACTIVE_EXPERTS];
@@ -91,7 +95,7 @@ KERNEL(moe_scatter_reduction_ref)(
     uint output_pos = dest_index + threads_index * VEC_BLK_SIZE * BATCHES_PER_THREAD;
 
     for (uint i = 0; i < BATCHES_PER_THREAD; i++) {
-        output_vec[i] = TO_OUTPUT_TYPE(0);
+        output_vec[i] = (ACC_VEC_TYPE)(0.0f);
     }
 
     for (uint i = 0; i < ACTIVE_EXPERTS; i++) {
@@ -105,18 +109,20 @@ KERNEL(moe_scatter_reduction_ref)(
         if (input_offset == (uint)UINT_MAX)
             continue;
 
-        INPUT2_TYPE expert_weight = expert_weights[token_group_id * ACTIVE_EXPERTS  + i];
+        float expert_weight = (float)expert_weights[token_group_id * ACTIVE_EXPERTS  + i];
 
         for (uint j = 0; j < BATCHES_PER_THREAD; j++) {
             const uint input_pos = input_offset * HIDDEN_SIZE + j * VEC_BLK_SIZE + threads_index * VEC_BLK_SIZE * BATCHES_PER_THREAD;
             INPUT_VEC_TYPE input_data = VLOAD(0, &input[input_pos]);
-            input_data *= expert_weight;
-            output_vec[j] += input_data;
+            ACC_VEC_TYPE acc_data = TO_ACC_VEC_TYPE(input_data);
+            acc_data *= expert_weight;
+            output_vec[j] += acc_data;
         }
     }
 
     for (uint v = 0; v < BATCHES_PER_THREAD; v++) {
         const uint out_pos = output_pos + v * VEC_BLK_SIZE;
-        VSTORE(output_vec[v], 0, &output[out_pos]);
+        OUTPUT_VEC_TYPE out_data = TO_OUTPUT_VEC_TYPE(output_vec[v]);
+        VSTORE(out_data, 0, &output[out_pos]);
     }
 }

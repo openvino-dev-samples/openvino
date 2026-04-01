@@ -40,11 +40,14 @@ KERNEL(moe_scatter_reduction_ref)(
         }
         uint in_pos = input_offset * HIDDEN_SIZE;
         uint out_pos = token_id * HIDDEN_SIZE;
+        float weight_f = (float)weight;
         for (uint h = 0; h < HIDDEN_SIZE; h++) {
+            // Accumulate in float to reduce FP16 rounding error
+            float val = (float)input[in_pos + h] * weight_f;
             if (e_iter == 0)
-                output[out_pos + h] = input[in_pos + h] * weight;
+                output[out_pos + h] = (OUTPUT_TYPE)val;
             else
-                output[out_pos + h] += input[in_pos + h] * weight;
+                output[out_pos + h] = (OUTPUT_TYPE)((float)output[out_pos + h] + val);
         }
     }
 }
