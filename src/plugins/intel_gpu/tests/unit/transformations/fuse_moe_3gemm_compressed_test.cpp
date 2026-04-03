@@ -131,6 +131,7 @@ TEST_P(FuseMOE3GemmCompressedTest, CompareFunctions) {
             args.push_back(routing_bias);
             auto routing_eps = op::v0::Constant::create(element::f16, Shape{1, 1}, {1e-6f});
             args.push_back(routing_eps);
+            args.push_back(routers);  // routing gate weight for FP32 GEMV
         }
 
         std::shared_ptr<ov::Node> result = std::make_shared<ov::intel_gpu::op::MOE3GemmFusedCompressed>(args, config);

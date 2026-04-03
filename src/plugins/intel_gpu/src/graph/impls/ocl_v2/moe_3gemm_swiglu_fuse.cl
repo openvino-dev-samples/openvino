@@ -74,9 +74,15 @@ KERNEL(softmax_topk)(
 #elif SIGMOID_BIAS_TOPK_ENABLE
 
 KERNEL(sigmoid_bias_topk)(
-    const __global MOE_DTYPE* input,    // routing logits [input_batch, num_experts]
+    const __global MOE_DTYPE* input,    // routing logits [input_batch, num_experts] (unused, kept for arg ordering)
     const __global MOE_DTYPE* bias,     // routing bias [1, num_experts] or [num_experts]
     const __global MOE_DTYPE* eps_ptr,  // routing epsilon scalar [1]
+    const __global MOE_DTYPE* hidden_states,  // [input_batch, hidden_dim] - for FP32 gate GEMV
+#if GATE_WEIGHT_IS_F32
+    const __global float*    gate_weight,     // [num_experts, hidden_dim] - dequantized (f32)
+#else
+    const __global MOE_DTYPE* gate_weight,    // [num_experts, hidden_dim] - dequantized (f16)
+#endif
     __global uint* output_index,        // [input_batch, TOP_K]
     __global MOE_DTYPE* output          // [input_batch, TOP_K]
 ) {
@@ -84,8 +90,6 @@ KERNEL(sigmoid_bias_topk)(
     const uint batch = (uint)get_global_id(0);
     const uint sort_index = (uint)get_global_id(1);
     const uint sort_cnt = (uint)get_global_size(1);  // num_experts
-
-    input += batch * sort_cnt + sort_index;
 
     // Use float for sigmoid/selection to preserve precision during expert selection.
     // FP16 has only ~3.3 decimal digits — with many experts and close sigmoid scores,
@@ -95,15 +99,22 @@ KERNEL(sigmoid_bias_topk)(
     __local float local_output[TOP_K];
     __local uint local_index[TOP_K];
 
-    // Compute sigmoid in float precision
-#if MOE_DTYPE_SIZE == 2
-    MOE_DTYPE in_value = as_half(intel_sub_group_block_read_us((const __global ushort*)(input)));
-#elif MOE_DTYPE_SIZE == 4
-    MOE_DTYPE in_value = as_float(intel_sub_group_block_read((const __global uint*)(input)));
+    // Compute gate logit via FP32 dot product: dot(hidden_states[batch], gate_weight[sort_index])
+    // This avoids FP16 accumulation error in the external gate MatMul (K=2048),
+    // which causes ~0.07 absolute error — far exceeding the inter-expert gap (~0.0004).
+    float gate_logit = 0.0f;
+    const uint expert_offset = sort_index * GATE_HIDDEN_DIM;
+    const uint batch_offset = batch * GATE_HIDDEN_DIM;
+    for (uint i = 0; i < GATE_HIDDEN_DIM; i++) {
+        float h = (float)hidden_states[batch_offset + i];
+#if GATE_WEIGHT_IS_F32
+        float w = gate_weight[expert_offset + i];
 #else
-#    error "sigmoid_bias_topk: unsupported MOE_DTYPE_SIZE"
+        float w = (float)gate_weight[expert_offset + i];
 #endif
-    float sigmoid_val = 1.0f / (1.0f + exp(-(float)in_value));
+        gate_logit += h * w;
+    }
+    float sigmoid_val = 1.0f / (1.0f + exp(-gate_logit));
 
     // Add bias for selection (determines which experts are chosen)
     float bias_val = (float)bias[sort_index];

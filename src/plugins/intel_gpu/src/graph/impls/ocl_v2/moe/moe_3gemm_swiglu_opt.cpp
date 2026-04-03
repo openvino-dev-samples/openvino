@@ -379,6 +379,9 @@ protected:
         jit.make("VALUE_NUM", desc->_config.num_expert);
         jit.make("MOE_DTYPE", params.get_input_layout(0).data_type == ov::element::f16 ? "half" : "float");
         jit.make("MOE_DTYPE_SIZE", params.get_input_layout(0).data_type == ov::element::f16 ? 2 : 4);
+        jit.make("GATE_HIDDEN_DIM", desc->_config.hidden_size);
+        auto gate_weight_dt = params.get_input_layout(static_cast<size_t>(MOE3GemmInputIndex::ROUTING_GATE_WEIGHT)).data_type;
+        jit.make("GATE_WEIGHT_IS_F32", gate_weight_dt == ov::element::f32 ? 1 : 0);
         return jit;
     }
 
@@ -938,6 +941,7 @@ public:
         }
         add_stage(gather, params);
         add_stage(scatter, params);
+        add_stage(scatter_f32_to_f16, params);
         add_stage(mlp_gate_up, params);
         add_stage(mlp_down, params);
         add_stage(mlp_reduce, params);
@@ -1850,7 +1854,9 @@ public:
                                        *sigmoid_bias_topk,
                                        {instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::ROUTING_WEIGHTS)),
                                         instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::ROUTING_BIAS)),
-                                        instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::ROUTING_EPS))},
+                                        instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::ROUTING_EPS)),
+                                        instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::HIDDEN_STATES)),
+                                        instance.input_memory_ptr(static_cast<size_t>(MOE3GemmInputIndex::ROUTING_GATE_WEIGHT))},
                                        {scratch.topk_id, scratch.topk_weights},
                                        {static_cast<size_t>(token_num), lws_size},
                                        {1, lws_size},

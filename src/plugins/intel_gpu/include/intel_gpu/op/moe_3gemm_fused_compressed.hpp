@@ -39,6 +39,8 @@ public:
     ///   shape [num_experts, hidden_size, group_num, 1]
     ///   11: routing_bias (optional, SIGMOID_BIAS only) - [1, num_experts] routing bias for sigmoid routing
     ///   12: routing_eps (optional, SIGMOID_BIAS only) - scalar epsilon for normalization (read at kernel compile time)
+    ///   13: routing_gate_weight (optional, SIGMOID_BIAS only) - dequantized gate weight [num_experts, hidden_size]
+    ///       for FP32 gate GEMV in the routing kernel (avoids FP16 accumulation precision loss)
     /// \param config Configuration for the MOE 3GEMM SWIGLU fused operation
     MOE3GemmFusedCompressed(const OutputVector& args, const MOECompressed::Config config);
 

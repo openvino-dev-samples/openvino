@@ -54,7 +54,8 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
 
     auto hidden_state_m = ANY;
     auto hidden_state_reshape = optional<ov::op::v1::Reshape>({hidden_state_m, ANY});
-    auto matmul = wrap_type<ov::op::v0::MatMul>({hidden_state_reshape, ANY}, consumers_count(1));
+    auto gate_routing_weight_m = ANY;
+    auto matmul = wrap_type<ov::op::v0::MatMul>({hidden_state_reshape, gate_routing_weight_m}, consumers_count(1));
 
     // ── Softmax routing branch ──────────────────────────────────────────
     auto sm_softmax = wrap_type<ov::op::v8::Softmax>({matmul}, consumers_count(1));
@@ -150,6 +151,7 @@ FuseMOE3GemmCompressed::FuseMOE3GemmCompressed() {
         if (pattern_map.count(sig_routing_bias)) {
             args.push_back(pattern_map.at(sig_routing_bias));
             args.push_back(pattern_map.at(sig_eps_value));
+            args.push_back(pattern_map.at(gate_routing_weight_m));
             config.routing_type = ov::intel_gpu::op::MOECompressed::RoutingType::SIGMOID_BIAS;
         }
 

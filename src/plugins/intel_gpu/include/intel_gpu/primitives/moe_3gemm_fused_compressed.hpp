@@ -44,6 +44,7 @@ struct moe_3gemm_fused_compressed : public primitive_base<moe_3gemm_fused_compre
     //                   10: w2_zp - expert zp for final projection for compressed experts,
     //                   11: routing_bias (optional, SIGMOID_BIAS only) - [1, num_experts] routing bias for sigmoid routing
     //                   12: routing_eps (optional, SIGMOID_BIAS only) - scalar epsilon for normalization (read at kernel compile time)
+    //                   13: routing_gate_weight (optional, SIGMOID_BIAS only) - dequantized gate weight for FP32 GEMV
     //
     moe_3gemm_fused_compressed(const primitive_id& id, const std::vector<input_info>& inputs, const MOE3GemmFusedCompressed::Config& config)
         : primitive_base(id, inputs, 1, {optional_data_type()}),
