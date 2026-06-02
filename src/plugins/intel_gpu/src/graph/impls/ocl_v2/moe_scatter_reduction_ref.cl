@@ -29,7 +29,11 @@ KERNEL(moe_scatter_reduction_ref)(
                 break;
             }
         }
-        uint exp_offset_start = experts_start_offset[idx];
+        #if ONEDNN_GROUPED_GEMM_USED
+            uint exp_offset_start = expert_id == 0 ? 0 : experts_start_offset[expert_id - 1];
+        #else
+            uint exp_offset_start = experts_start_offset[idx];
+        #endif
         uint input_len = tokens_len_per_expert[idx];
         uint input_offset = 0;
         for (uint t = 0; t < input_len; ++t) {
@@ -40,14 +44,11 @@ KERNEL(moe_scatter_reduction_ref)(
         }
         uint in_pos = input_offset * HIDDEN_SIZE;
         uint out_pos = token_id * HIDDEN_SIZE;
-        float weight_f = (float)weight;
         for (uint h = 0; h < HIDDEN_SIZE; h++) {
-            // Accumulate in float to reduce FP16 rounding error
-            float val = (float)input[in_pos + h] * weight_f;
             if (e_iter == 0)
-                output[out_pos + h] = (OUTPUT_TYPE)val;
+                output[out_pos + h] = input[in_pos + h] * weight;
             else
-                output[out_pos + h] = (OUTPUT_TYPE)((float)output[out_pos + h] + val);
+                output[out_pos + h] += input[in_pos + h] * weight;
         }
     }
 }

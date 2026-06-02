@@ -16,11 +16,5 @@ public:
     VectorizedMOE2GEMMTransposeWeights();
 };
 
-class TRANSFORMATIONS_API VectorizedMOE3GEMMTransposeWeights : public ov::pass::MatcherPass {
-public:
-    OPENVINO_MATCHER_PASS_RTTI("VectorizedMOE3GEMMTransposeWeights");
-    VectorizedMOE3GEMMTransposeWeights();
-};
-
 }  // namespace pass
 }  // namespace ov

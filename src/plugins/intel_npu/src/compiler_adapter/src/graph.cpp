@@ -10,6 +10,8 @@
 #include "intel_npu/config/options.hpp"
 #include "intel_npu/utils/utils.hpp"
 #include "intel_npu/utils/zero/zero_api.hpp"
+#include "intel_npu/utils/zero/zero_cmd_queue_pool.hpp"
+#include "intel_npu/utils/zero/zero_utils.hpp"
 #include "openvino/runtime/make_tensor.hpp"
 
 namespace intel_npu {
@@ -20,6 +22,7 @@ Graph::Graph(const std::shared_ptr<ZeGraphExtWrappers>& zeGraphExt,
              NetworkMetadata metadata,
              std::optional<ov::Tensor> blob,
              const FilteredConfig& config,
+             const std::optional<std::string>& compatibilityDescriptor,
              const bool blobIsPersistent,
              const bool calledFromWeightlessGraph)
     : IGraph(),
@@ -28,6 +31,7 @@ Graph::Graph(const std::shared_ptr<ZeGraphExtWrappers>& zeGraphExt,
       _graphDesc(graphDesc),
       _metadata(std::move(metadata)),
       _blob(std::move(blob)),
+      _compatibilityDescriptor(compatibilityDescriptor),
       _blobIsPersistent(blobIsPersistent),
       _logger("Graph", config.get<LOG_LEVEL>()) {
     if (!config.get<CREATE_EXECUTOR>() || config.get<DEFER_WEIGHTS_LOAD>()) {
@@ -49,29 +53,35 @@ void Graph::update_network_name(std::string_view name) {
     _metadata.name = name;
 }
 
-const std::shared_ptr<CommandQueue>& Graph::get_command_queue() const {
-    return _commandQueue;
+CommandQueueDesc Graph::get_command_queue_desc() const {
+    std::lock_guard<std::mutex> lock(_commandQueueDescMutex);
+    return _commandQueueDesc;
 }
 
-void Graph::set_workload_type(const ov::WorkloadType workloadType) const {
-    std::lock_guard<std::mutex> lock(_commandQueueMutex);
-    if (_commandQueue == nullptr) {
+void Graph::set_workload_type(const ov::WorkloadType workloadType) {
+    if (_zeroInitStruct == nullptr) {
         return;
     }
 
-    ze_command_queue_workload_type_t zeWorkloadType;
-    switch (workloadType) {
-    case ov::WorkloadType::DEFAULT:
-        zeWorkloadType = ze_command_queue_workload_type_t::ZE_WORKLOAD_TYPE_DEFAULT;
-        break;
-    case ov::WorkloadType::EFFICIENT:
-        zeWorkloadType = ze_command_queue_workload_type_t::ZE_WORKLOAD_TYPE_BACKGROUND;
-        break;
-    default:
-        OPENVINO_THROW("Unknown value for WorkloadType!");
+    std::lock_guard<std::mutex> lock(_commandQueueDescMutex);
+    auto zeWorkloadType = zeroUtils::toZeQueueWorkloadType(workloadType);
+    if (_commandQueueDesc.workload() == zeWorkloadType) {
+        return;
+    }
+    _commandQueueDesc.set_workload(zeWorkloadType);
+}
+
+void Graph::set_model_priority(const ov::hint::Priority modelPriority) {
+    if (_zeroInitStruct == nullptr) {
+        return;
     }
 
-    _commandQueue->setWorkloadType(zeWorkloadType);
+    std::lock_guard<std::mutex> lock(_commandQueueDescMutex);
+    auto zeModelPriority = zeroUtils::toZeQueuePriority(modelPriority);
+    if (_commandQueueDesc.priority() == zeModelPriority) {
+        return;
+    }
+    _commandQueueDesc.set_priority(zeModelPriority);
 }
 
 ze_graph_handle_t Graph::get_handle() const {
@@ -111,10 +121,7 @@ std::pair<uint64_t, std::optional<std::vector<uint64_t>>> Graph::export_blob(std
         for (const uint8_t* it = blobPtr; it != blobPtr + blobSize; ++it) {
             result = ((result << 7) + result) + static_cast<uint32_t>(*it);
         }
-
-        std::stringstream str;
-        str << "Blob size: " << blobSize << ", hash: " << std::hex << result;
-        _logger.info(str.str().c_str());
+        _logger.info("Blob size: %zu, hash: %x", blobSize, result);
     }
 
     size_t size = utils::align_size_to_standard_page_size(blobSize);
@@ -127,7 +134,7 @@ std::pair<uint64_t, std::optional<std::vector<uint64_t>>> Graph::export_blob(std
             return std::make_pair(0, std::nullopt);
         }
 
-        _logger.info("Blob size with padding: %ld", size);
+        _logger.info("Blob size with padding: %zu", size);
     }
 
     _logger.info("Write blob to stream successfully.");
@@ -135,7 +142,7 @@ std::pair<uint64_t, std::optional<std::vector<uint64_t>>> Graph::export_blob(std
 }
 
 std::vector<ov::ProfilingInfo> Graph::process_profiling_output(const std::vector<uint8_t>& profData) const {
-    auto compiler = VCLCompilerImpl::getInstance();
+    auto compiler = std::make_shared<VCLCompilerImpl>();
     OPENVINO_ASSERT(compiler != nullptr, "Profiling post-processing requires the NPU plugin compiler library");
 
     std::vector<uint8_t> blob(_blob->get_byte_size());
@@ -180,14 +187,14 @@ void Graph::initialize_impl(const FilteredConfig& config) {
     }
 
     {
-        std::lock_guard<std::mutex> lock(_commandQueueMutex);
-        _commandQueue = std::make_shared<CommandQueue>(_zeroInitStruct,
-                                                       zeroUtils::toZeQueuePriority(config.get<MODEL_PRIORITY>()),
-                                                       commandQueueOptions);
-    }
-
-    if (config.has<WORKLOAD_TYPE>()) {
-        set_workload_type(config.get<WORKLOAD_TYPE>());
+        std::lock_guard<std::mutex> lock(_commandQueueDescMutex);
+        _commandQueueDesc = CommandQueueDesc{
+            zeroUtils::toZeQueuePriority(config.get<MODEL_PRIORITY>()),
+            config.has<WORKLOAD_TYPE>() ? zeroUtils::toZeQueueWorkloadType(config.get<WORKLOAD_TYPE>()) : std::nullopt,
+            commandQueueOptions,
+            this,
+            config.get<SHARED_COMMON_QUEUE>(),
+        };
     }
 
     _zeGraphExt->initializeGraph(_graphDesc);
@@ -261,6 +268,10 @@ uint32_t Graph::get_last_submitted_id() const {
     return _lastSubmittedId;
 }
 
+std::optional<std::string_view> Graph::get_compatibility_descriptor() const {
+    return _compatibilityDescriptor;
+}
+
 std::optional<bool> Graph::is_profiling_blob() const {
     if (_zeroInitStruct->getGraphDdiTable().version() < ZE_MAKE_VERSION(1, 16)) {
         _logger.debug("Cannot determine if the blob was compiled for profiling");
@@ -331,6 +342,12 @@ const std::optional<std::size_t> Graph::get_batch_size() const {
     return _batchSize;
 }
 
+void Graph::evict_memory() {
+    if (_zeGraphExt != nullptr) {
+        _zeGraphExt->evict_memory(_graphDesc);
+    }
+}
+
 Graph::~Graph() {
     // make sure all the context-dependent components are destroyed before the zero context is destroyed
     if (_zeGraphExt != nullptr) {
@@ -339,10 +356,6 @@ Graph::~Graph() {
 
     if (!_lastSubmittedEvent.empty()) {
         _lastSubmittedEvent.clear();
-    }
-
-    if (_commandQueue != nullptr) {
-        _commandQueue.reset();
     }
 }
 

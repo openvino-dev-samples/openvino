@@ -58,11 +58,13 @@ KERNEL(softmax_topk)(
         MOE_DTYPE max_v = local_output[0];
         local_output[0] = 1;
         for(uint i = 1; i < TOP_K; i++) {
-            local_output[i] = exp(local_output[i] - max_v);
+            local_output[i] = native_exp(local_output[i] - max_v);
             softmax_total += local_output[i];
         }
         output_index += batch * TOP_K;
-        output += batch * TOP_K;
+        // Use EXPERTS_PER_TOKEN stride so batched GEMV reads multi-token weights correctly.
+        // For shared expert: EXPERTS_PER_TOKEN=TOP_K+1. For non-shared: TOP_K (no change).
+        output += batch * (TOP_K + SHARED_EXPERT_ENABLE);
 
         for(uint i = 0; i < TOP_K; i++) {
             output[i] = local_output[i]/softmax_total;
@@ -74,15 +76,9 @@ KERNEL(softmax_topk)(
 #elif SIGMOID_BIAS_TOPK_ENABLE
 
 KERNEL(sigmoid_bias_topk)(
-    const __global MOE_DTYPE* input,    // routing logits [input_batch, num_experts] (unused, kept for arg ordering)
+    const __global MOE_DTYPE* input,    // routing logits [input_batch, num_experts]
     const __global MOE_DTYPE* bias,     // routing bias [1, num_experts] or [num_experts]
     const __global MOE_DTYPE* eps_ptr,  // routing epsilon scalar [1]
-    const __global MOE_DTYPE* hidden_states,  // [input_batch, hidden_dim] - for FP32 gate GEMV
-#if GATE_WEIGHT_IS_F32
-    const __global float*    gate_weight,     // [num_experts, hidden_dim] - dequantized (f32)
-#else
-    const __global MOE_DTYPE* gate_weight,    // [num_experts, hidden_dim] - dequantized (f16)
-#endif
     __global uint* output_index,        // [input_batch, TOP_K]
     __global MOE_DTYPE* output          // [input_batch, TOP_K]
 ) {
@@ -91,34 +87,26 @@ KERNEL(sigmoid_bias_topk)(
     const uint sort_index = (uint)get_global_id(1);
     const uint sort_cnt = (uint)get_global_size(1);  // num_experts
 
-    // Use float for sigmoid/selection to preserve precision during expert selection.
-    // FP16 has only ~3.3 decimal digits — with many experts and close sigmoid scores,
-    // FP16 sorting can select different experts than FP32, causing large output divergence.
-    __local float local_sigmoid[VALUE_NUM];       // raw sigmoid values (float precision)
-    __local float local_selection[VALUE_NUM];     // sigmoid + bias for sorting (float precision)
-    __local float local_output[TOP_K];
+    input += batch * sort_cnt + sort_index;
+
+    __local MOE_DTYPE local_sigmoid[VALUE_NUM];     // raw sigmoid values
+    __local MOE_DTYPE local_selection[VALUE_NUM];   // sigmoid + bias (for sorting)
+    __local MOE_DTYPE local_output[TOP_K];
     __local uint local_index[TOP_K];
 
-    // Compute gate logit via FP32 dot product: dot(hidden_states[batch], gate_weight[sort_index])
-    // This avoids FP16 accumulation error in the external gate MatMul (K=2048),
-    // which causes ~0.07 absolute error — far exceeding the inter-expert gap (~0.0004).
-    float gate_logit = 0.0f;
-    const uint expert_offset = sort_index * GATE_HIDDEN_DIM;
-    const uint batch_offset = batch * GATE_HIDDEN_DIM;
-    for (uint i = 0; i < GATE_HIDDEN_DIM; i++) {
-        float h = (float)hidden_states[batch_offset + i];
-#if GATE_WEIGHT_IS_F32
-        float w = gate_weight[expert_offset + i];
+    // Compute sigmoid
+#if MOE_DTYPE_SIZE == 2
+    MOE_DTYPE in_value = as_half(intel_sub_group_block_read_us((const __global ushort*)(input)));
+#elif MOE_DTYPE_SIZE == 4
+    MOE_DTYPE in_value = as_float(intel_sub_group_block_read((const __global uint*)(input)));
 #else
-        float w = (float)gate_weight[expert_offset + i];
+#    error "sigmoid_bias_topk: unsupported MOE_DTYPE_SIZE"
 #endif
-        gate_logit += h * w;
-    }
-    float sigmoid_val = 1.0f / (1.0f + exp(-gate_logit));
+    MOE_DTYPE sigmoid_val = (MOE_DTYPE)(1.0f / (1.0f + native_exp(-(float)in_value)));
 
     // Add bias for selection (determines which experts are chosen)
-    float bias_val = (float)bias[sort_index];
-    float selection_val = sigmoid_val + bias_val;
+    MOE_DTYPE bias_val = bias[sort_index];
+    MOE_DTYPE selection_val = sigmoid_val + bias_val;
 
     local_sigmoid[sort_index] = sigmoid_val;
     local_selection[sort_index] = selection_val;
@@ -130,7 +118,7 @@ KERNEL(sigmoid_bias_topk)(
 
     __attribute__((opencl_unroll_hint(8)))
     for(uint i = 0; i < sort_index; i++) {
-        float value = local_selection[i];
+        MOE_DTYPE value = local_selection[i];
         if(value >= selection_val) {
             sort_position++;
         }
@@ -138,7 +126,7 @@ KERNEL(sigmoid_bias_topk)(
 
     __attribute__((opencl_unroll_hint(8)))
     for(uint i = sort_index; i < sort_cnt; i++) {
-        float value = local_selection[i];
+        MOE_DTYPE value = local_selection[i];
         if(value > selection_val) {
             sort_position++;
         }
@@ -155,15 +143,15 @@ KERNEL(sigmoid_bias_topk)(
     if(sort_position == 0) {
         float sum_weights = 0.0f;
         for(uint i = 0; i < actual_topk; i++) {
-            sum_weights += local_output[i];
+            sum_weights += (float)local_output[i];
         }
         sum_weights += (float)eps_ptr[0];  // epsilon to avoid division by zero
 
         output_index += batch * TOP_K;
-        output += batch * TOP_K;
+        output += batch * (TOP_K + SHARED_EXPERT_ENABLE);
 
         for(uint i = 0; i < actual_topk; i++) {
-            output[i] = (MOE_DTYPE)(local_output[i] / sum_weights);
+            output[i] = (MOE_DTYPE)((float)local_output[i] / sum_weights);
             output_index[i] = local_index[i];
         }
         // Zero out remaining positions if TOP_K > actual_topk
@@ -213,54 +201,29 @@ KERNEL (gather_2d_ref)(
 }
 
 #elif SCATTER_ENABLE
-// Accumulate expert outputs into an FP32 buffer to avoid FP16 truncation at each step.
-// With 16 experts, accumulating in FP16 loses ~1-2 bits per step (16 steps = catastrophic).
-// The FP32 buffer is converted to FP16 once after all experts are done (see SCATTER_F32_TO_F16_ENABLE).
 KERNEL (index_add_)(const __global MOE_DTYPE* src_tok,
     __global int * tok_index,
-    __global float* dst_tok_f32) {
+    __global MOE_DTYPE* dst_tok) {
 
     int k = get_global_id(0);
     int off = get_global_id(1);
     int tok_idx = tok_index[k];
 
     src_tok += k * HIDDEN_SIZE;
-    dst_tok_f32 += tok_idx * HIDDEN_SIZE;
+    dst_tok += tok_idx * HIDDEN_SIZE;
 
     #if MOE_DTYPE_SIZE == 2
-        float src_value = (float)as_half(intel_sub_group_block_read_us((const __global ushort *)(src_tok + off)));
-        float dst_value = as_float(intel_sub_group_block_read((const __global uint *)(dst_tok_f32 + off)));
-        float value = dst_value + src_value;
-        intel_sub_group_block_write((__global uint *)(dst_tok_f32 + off), as_uint(value));
+        half src_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(src_tok + off)));
+        half dst_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(dst_tok + off)));
+        half value = dst_value + src_value;
+        intel_sub_group_block_write_us((__global ushort *)(dst_tok + off), as_ushort(value));
     #elif MOE_DTYPE_SIZE == 4
         float src_value = as_float(intel_sub_group_block_read((const __global uint *)(src_tok + off)));
-        float dst_value = as_float(intel_sub_group_block_read((const __global uint *)(dst_tok_f32 + off)));
+        float dst_value = as_float(intel_sub_group_block_read((const __global uint *)(dst_tok + off)));
         float value = dst_value + src_value;
-        intel_sub_group_block_write((__global uint *)(dst_tok_f32 + off), as_uint(value));
+        intel_sub_group_block_write_us((__global ushort *)(dst_tok + off), as_uint(value));
     #else
-        dst_tok_f32[off] += (float)src_tok[off];
-    #endif
-}
-
-#elif SCATTER_F32_TO_F16_ENABLE
-// Final conversion: FP32 accumulation buffer → FP16 output
-KERNEL (scatter_f32_to_f16)(const __global float* src_f32,
-    __global MOE_DTYPE* dst) {
-
-    int idx = get_global_id(0);
-    int off = get_global_id(1);
-
-    src_f32 += idx * HIDDEN_SIZE;
-    dst += idx * HIDDEN_SIZE;
-
-    #if MOE_DTYPE_SIZE == 2
-        float value = as_float(intel_sub_group_block_read((const __global uint *)(src_f32 + off)));
-        intel_sub_group_block_write_us((__global ushort *)(dst + off), as_ushort((half)value));
-    #elif MOE_DTYPE_SIZE == 4
-        float value = as_float(intel_sub_group_block_read((const __global uint *)(src_f32 + off)));
-        intel_sub_group_block_write((__global uint *)(dst + off), as_uint(value));
-    #else
-        dst[off] = (MOE_DTYPE)src_f32[off];
+        dst_tok[off] += src_tok[off];
     #endif
 }
 
@@ -268,6 +231,39 @@ KERNEL (scatter_f32_to_f16)(const __global float* src_f32,
 
 #define SWISH_BETA 1.0f
 #define ACC_DTYPE float
+
+// Tanh-approximation Gelu: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+#define GELU_TANH_SQRT_2_OVER_PI 0.7978845608028654f
+#define GELU_TANH_C 0.044715f
+
+// ERF Gelu: 0.5 * x * (1 + erf(x / sqrt(2))); 1/sqrt(2) = 0.7071067811865475
+// Fast erf approximation (A&S 7.1.26) — same coefficients as swiglu_gpu_opt.cl
+inline float moe_fast_erf(float x) {
+    if (x > 4.0f) return 1.0f;
+    if (x < -4.0f) return -1.0f;
+    const float p  = 0.3275911f;
+    const float a1 = 0.254829592f;
+    const float a2 = -0.284496736f;
+    const float a3 = 1.421413741f;
+    const float a4 = -1.453152027f;
+    const float a5 = 1.061405429f;
+    float z = fabs(x);
+    float t = 1.0f / (1.0f + p * z);
+    float y = 1.0f - (((((a5 * t + a4) * t) + a3) * t + a2) * t + a1) * t * native_exp(-(z * z));
+    return (x >= 0.0f) ? y : -y;
+}
+
+inline ACC_DTYPE moe_gate_activation(ACC_DTYPE x) {
+#if GATE_ACT_GELU_ERF
+    return 0.5f * x * (1.0f + moe_fast_erf(x * 0.7071067811865475f));
+#elif GATE_ACT_GELU_TANH
+    return 0.5f * x * (1.0f + (tanh(0.79788458347320556640625f * x * (1.0f + 0.044715f * x * x))));
+#else
+    // Swish (SwiGLU): x * sigmoid(beta * x)
+    return x / (1.0f + native_exp(-SWISH_BETA * x));
+#endif
+}
+
 __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE)))
 KERNEL(swiglu_ref) (
     const __global MOE_DTYPE* up, // [token_len * expert_topK, inter_size]
@@ -284,14 +280,14 @@ KERNEL(swiglu_ref) (
     const uint offset = token_idx * INTERMEDIA_SIZE + n_offset - sg_id;
     ACC_DTYPE up_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(up + offset)));
     ACC_DTYPE gate_value = as_half(intel_sub_group_block_read_us((const __global ushort *)(gate + offset)));
-    ACC_DTYPE value = gate_value / (1.0f + exp(-SWISH_BETA * gate_value));
+    ACC_DTYPE value = moe_gate_activation(gate_value);
     half result = value * up_value;
     intel_sub_group_block_write_us((__global ushort *)(output + offset), as_ushort(result));
 #else
     const uint offset = token_idx * INTERMEDIA_SIZE + n_offset;
     ACC_DTYPE gate_value = gate[offset];
     ACC_DTYPE up_value = up[offset];
-    ACC_DTYPE value = gate_value / (1.0f + exp(-SWISH_BETA * gate_value));
+    ACC_DTYPE value = moe_gate_activation(gate_value);
     ACC_DTYPE result = value * up_value;
     output[offset] = result;
 #endif

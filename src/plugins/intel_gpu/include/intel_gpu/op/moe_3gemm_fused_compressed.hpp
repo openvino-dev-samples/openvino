@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "intel_gpu/op/moe_compressed.hpp"
+#include "ov_ops/moe_compressed.hpp"
 
 namespace ov::intel_gpu::op {
 
 /// \brief MOE3GemmFusedCompressed that support compressed and fused MOE for GEMM3_SWIGLU.
-class MOE3GemmFusedCompressed : public MOECompressed {
+class MOE3GemmFusedCompressed : public ov::op::internal::MOECompressed {
 public:
-    OPENVINO_OP("MOE3GemmFusedCompressed", "gpu_opset", MOECompressed);
+    OPENVINO_OP("MOE3GemmFusedCompressed", "gpu_opset", ov::op::internal::MOECompressed);
 
     MOE3GemmFusedCompressed() = default;
 
@@ -39,8 +39,6 @@ public:
     ///   shape [num_experts, hidden_size, group_num, 1]
     ///   11: routing_bias (optional, SIGMOID_BIAS only) - [1, num_experts] routing bias for sigmoid routing
     ///   12: routing_eps (optional, SIGMOID_BIAS only) - scalar epsilon for normalization (read at kernel compile time)
-    ///   13: routing_gate_weight (optional, SIGMOID_BIAS only) - dequantized gate weight [num_experts, hidden_size]
-    ///       for FP32 gate GEMV in the routing kernel (avoids FP16 accumulation precision loss)
     /// \param config Configuration for the MOE 3GEMM SWIGLU fused operation
     MOE3GemmFusedCompressed(const OutputVector& args, const MOECompressed::Config config);
 
