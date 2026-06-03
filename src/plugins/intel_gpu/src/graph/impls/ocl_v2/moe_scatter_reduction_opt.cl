@@ -8,6 +8,10 @@
 #define VSTORE CAT(vstore, VEC_BLK_SIZE)
 #define INPUT_VEC_TYPE  MAKE_VECTOR_TYPE(INPUT0_TYPE, VEC_BLK_SIZE)
 #define OUTPUT_VEC_TYPE MAKE_VECTOR_TYPE(OUTPUT_TYPE, VEC_BLK_SIZE)
+// Float accumulator vector + conversions, for fp32 reduction of the per-expert contributions.
+#define FLOAT_VEC_TYPE    MAKE_VECTOR_TYPE(float, VEC_BLK_SIZE)
+#define CONVERT_FLOAT_VEC CAT(convert_float, VEC_BLK_SIZE)
+#define CONVERT_OUTPUT_VEC CAT(convert_, OUTPUT_VEC_TYPE)
 
 KERNEL(moe_scatter_reduction_ref)(
     OPTIONAL_SHAPE_INFO_ARG
@@ -95,8 +99,12 @@ KERNEL(moe_scatter_reduction_ref)(
     uint dest_index = token_group_id * HIDDEN_SIZE;
     uint output_pos = dest_index + threads_index * VEC_BLK_SIZE * BATCHES_PER_THREAD;
 
+    // Accumulate the weighted per-expert contributions in float, not OUTPUT_TYPE (half): summing up
+    // to ACTIVE_EXPERTS top-k outputs in FP16 drifts from the CPU reference (fp32 accumulation) and
+    // can flip a borderline greedy token. Widen to float for the running sum, cast back on store.
+    FLOAT_VEC_TYPE acc[BATCHES_PER_THREAD];
     for (uint i = 0; i < BATCHES_PER_THREAD; i++) {
-        output_vec[i] = TO_OUTPUT_TYPE(0);
+        acc[i] = (FLOAT_VEC_TYPE)(0.0f);
     }
 
     for (uint i = 0; i < ACTIVE_EXPERTS; i++) {
@@ -110,18 +118,18 @@ KERNEL(moe_scatter_reduction_ref)(
         if (input_offset == (uint)UINT_MAX)
             continue;
 
-        INPUT2_TYPE expert_weight = expert_weights[token_group_id * ACTIVE_EXPERTS  + i];
+        float expert_weight = (float)expert_weights[token_group_id * ACTIVE_EXPERTS  + i];
 
         for (uint j = 0; j < BATCHES_PER_THREAD; j++) {
             const uint input_pos = input_offset * HIDDEN_SIZE + j * VEC_BLK_SIZE + threads_index * VEC_BLK_SIZE * BATCHES_PER_THREAD;
             INPUT_VEC_TYPE input_data = VLOAD(0, &input[input_pos]);
-            input_data *= expert_weight;
-            output_vec[j] += input_data;
+            acc[j] += CONVERT_FLOAT_VEC(input_data) * expert_weight;
         }
     }
 
     for (uint v = 0; v < BATCHES_PER_THREAD; v++) {
         const uint out_pos = output_pos + v * VEC_BLK_SIZE;
+        output_vec[v] = CONVERT_OUTPUT_VEC(acc[v]);
         VSTORE(output_vec[v], 0, &output[out_pos]);
     }
 }

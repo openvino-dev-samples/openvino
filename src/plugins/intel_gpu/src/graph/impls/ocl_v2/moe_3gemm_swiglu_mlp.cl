@@ -1122,13 +1122,15 @@ __attribute__((intel_reqd_sub_group_size(SUBGROUP_SIZE))) KERNEL(mlp_reduce)(con
 #    else
 #        define REDUCE_COUNT MAX_TOPK
 #    endif
-    half sum[REDUCE_COUNT] = {0};
+    // Accumulate the per-expert contributions in float, not half: summing up to MAX_TOPK(+1)
+    // FP16 expert outputs in FP16 loses precision relative to the CPU reference (which accumulates
+    // in fp32), and with many experts the rounding drift can flip a borderline greedy token. Read
+    // each expert output as half, widen to float for the running sum, cast back to half on write.
+    float sum = 0.0f;
     __attribute__((opencl_unroll_hint(REDUCE_COUNT))) for (int i = 0; i < REDUCE_COUNT; i++) {
-        sum[i] = as_half(intel_sub_group_block_read_us((const __global ushort*)(x + (token_idx * REDUCE_COUNT + i) * HIDDEN_SIZE + n)));
+        half v = as_half(intel_sub_group_block_read_us((const __global ushort*)(x + (token_idx * REDUCE_COUNT + i) * HIDDEN_SIZE + n)));
+        sum += (float)v;
     }
-    for (int i = 1; i < REDUCE_COUNT; i++) {
-        sum[0] += sum[i];
-    }
-    intel_sub_group_block_write_us((__global ushort*)(y + token_idx * HIDDEN_SIZE + n), as_ushort(sum[0]));
+    intel_sub_group_block_write_us((__global ushort*)(y + token_idx * HIDDEN_SIZE + n), as_ushort((half)sum));
 }
 #endif

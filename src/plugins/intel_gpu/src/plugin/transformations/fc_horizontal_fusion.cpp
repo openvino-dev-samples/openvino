@@ -6,6 +6,7 @@
 
 #include "intel_gpu/op/fully_connected.hpp"
 #include "intel_gpu/op/fully_connected_compressed.hpp"
+#include "intel_gpu/op/moe_3gemm_fused_compressed.hpp"
 
 #include "openvino/core/rt_info.hpp"
 #include "openvino/opsets/opset1_decl.hpp"
@@ -39,7 +40,23 @@ FullyConnectedHorizontalFusion::FullyConnectedHorizontalFusion(bool fuse_mlp_swi
     // Onednn gemms are to be handled in a different way (TBD)
     if (fuse_mlp_swiglu)
         min_num_fcs_to_fuse = 2;
-    auto is_target_pattern = [min_num_fcs_to_fuse](const Output<Node>& output) {
+    // An FC whose output feeds a MOE3GemmFusedCompressed op is the MoE router gate: its logits are
+    // consumed (as a distinct input) by the fused MoE kernel, which expects a standalone [tokens, num_experts]
+    // tensor. Horizontally fusing it with sibling FCs (e.g. the shared-expert gate/up projections that share
+    // the same hidden-state input) merges it into one MatMul + VariadicSplit, after which the MoE op ends up
+    // reading the wrong split slice as routing logits — corrupting expert selection. Exclude such FCs.
+    auto feeds_moe_router = [](const std::shared_ptr<ov::Node>& fc) {
+        for (const auto& out : fc->outputs()) {
+            for (const auto& consumer : out.get_target_inputs()) {
+                if (ov::as_type<ov::intel_gpu::op::MOE3GemmFusedCompressed>(consumer.get_node())) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    auto is_target_pattern = [min_num_fcs_to_fuse, feeds_moe_router](const Output<Node>& output) {
         const int max_num_fcs_to_fuse = 3;
         // Currently this pass targets only compressed FCs (QKV) on dynamic generative models
         // inputs: input, weight, bias, scale, [zp]
@@ -63,12 +80,16 @@ FullyConnectedHorizontalFusion::FullyConnectedHorizontalFusion(bool fuse_mlp_swi
         const auto& input = fc->get_input_node_shared_ptr(0);
         if (!fc->get_input_partial_shape(0).is_dynamic())
             return false;
+        if (feeds_moe_router(fc))
+            return false;
         size_t user_fc_count = 0;
         int32_t nodes_with_bias = 0;
         int32_t nodes_with_zp = 0;
         for (const auto& u : input->get_users()) {
             const auto& fc_user = ov::as_type_ptr<op::FullyConnectedCompressed>(u);
             if (!fc_user)
+                continue;
+            if (feeds_moe_router(fc_user))
                 continue;
             auto num_inputs = fc_user->inputs().size();
             if (num_inputs >= 5)
@@ -104,6 +125,8 @@ FullyConnectedHorizontalFusion::FullyConnectedHorizontalFusion(bool fuse_mlp_swi
         for (auto user : input_node->get_users()) {
             auto fc_user = ov::as_type_ptr<op::FullyConnectedCompressed>(user);
             if (fc_user) {
+                if (feeds_moe_router(fc_user))
+                    continue;  // keep the MoE router gate out of the horizontal fusion (see is_target_pattern)
                 OPENVINO_ASSERT(fc_user->inputs().size() >= 4, "Compressed FC should have at least 4 inputs");
                 fc_nodes.push_back(fc_user);
                 fc_nodes_vec.push_back(fc_user);
